@@ -77,6 +77,29 @@ class AgentConfig:
 
 
 @dataclass
+class VoiceConfig:
+    """Voice / Speech-to-Text configuration (Groq Whisper)"""
+    enabled: bool = field(
+        default_factory=lambda: os.getenv("VOICE_ENABLED", "false").lower() == "true"
+    )
+    provider: str = field(
+        default_factory=lambda: os.getenv("VOICE_PROVIDER", "groq")
+    )
+    groq_api_key: str = field(
+        default_factory=lambda: os.getenv("GROQ_API_KEY", "")
+    )
+    whisper_model: str = field(
+        default_factory=lambda: os.getenv("WHISPER_MODEL", "whisper-large-v3-turbo")
+    )
+    language: str = field(
+        default_factory=lambda: os.getenv("VOICE_LANGUAGE", "es")
+    )
+    max_audio_duration_seconds: int = field(
+        default_factory=lambda: int(os.getenv("MAX_AUDIO_DURATION_SECONDS", "60"))
+    )
+
+
+@dataclass
 class LangSmithConfig:
     """LangSmith tracing configuration"""
     enabled: bool = field(
@@ -117,6 +140,7 @@ class Config:
     agent: AgentConfig = field(default_factory=AgentConfig)
     observability: ObservabilityConfig = field(default_factory=ObservabilityConfig)
     langsmith: LangSmithConfig = field(default_factory=LangSmithConfig)
+    voice: VoiceConfig = field(default_factory=VoiceConfig)
 
 
 # Singleton instance

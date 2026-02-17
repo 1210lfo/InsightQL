@@ -206,3 +206,85 @@ async def run_analytics_query(
         "validation_passed": final_state.get("validation_passed"),
         "state": final_state,
     }
+
+
+async def run_voice_query(
+    audio_data: bytes,
+    audio_format: str = "wav",
+    user_id: str = "anonymous",
+    org_id: str = "default",
+    timezone: str = "UTC",
+    lang: str = "es",
+    conversation_history: list[dict] | None = None,
+) -> dict:
+    """
+    Run an analytics query from voice audio input.
+    
+    Pipeline: Audio → Groq Whisper STT → Text → LangGraph Agent
+    
+    Args:
+        audio_data: Raw audio bytes
+        audio_format: Audio format (wav, mp3, m4a, webm, ogg)
+        user_id: User identifier
+        org_id: Organization identifier
+        timezone: User's timezone
+        lang: Language preference
+        conversation_history: Previous conversation turns
+        
+    Returns:
+        Dict with transcription, answer, evidence, recommendations
+    """
+    from src.voice.transcriber import VoiceTranscriber
+
+    # Step 1: Transcribe audio to text
+    transcriber = VoiceTranscriber()
+    
+    if not transcriber.is_enabled():
+        return {
+            "answer": "🎙️ La función de voz no está habilitada. Configura VOICE_ENABLED=true y GROQ_API_KEY en tu .env",
+            "transcription": None,
+            "voice_error": "Voice not enabled",
+        }
+
+    transcription = await transcriber.transcribe(audio_data, audio_format, lang)
+    
+    if not transcription.success:
+        return {
+            "answer": f"🎙️ No pude procesar el audio: {transcription.error}",
+            "transcription": None,
+            "voice_error": transcription.error,
+        }
+
+    logger.info(
+        f"Voice transcription: '{transcription.text}' "
+        f"({transcription.duration_seconds:.1f}s, {transcription.provider})"
+    )
+
+    # Step 2: Run the text query through the existing agent
+    result = await run_analytics_query(
+        query=transcription.text,
+        user_id=user_id,
+        org_id=org_id,
+        timezone=timezone,
+        lang=lang,
+        conversation_history=conversation_history,
+    )
+
+    # Step 3: Enrich result with voice metadata
+    result["transcription"] = {
+        "text": transcription.text,
+        "language": transcription.language,
+        "duration_seconds": transcription.duration_seconds,
+        "provider": transcription.provider,
+        "processing_time_ms": transcription.processing_time_ms,
+    }
+    result["input_type"] = "voice"
+
+    # Update state with voice info
+    if "state" in result:
+        result["state"]["input_type"] = "voice"
+        result["state"]["audio_transcript"] = transcription.text
+        result["state"]["audio_duration_seconds"] = transcription.duration_seconds
+        result["state"]["voice_provider"] = transcription.provider
+
+    return result

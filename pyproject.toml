@@ -20,6 +20,8 @@ dependencies = [
     "langsmith>=0.1.0",
     "jsonpointer>=3.0.0",
     "streamlit>=1.53.1",
+    # Voice / Speech-to-Text
+    "groq>=0.9.0",
 ]
 
 [project.optional-dependencies]

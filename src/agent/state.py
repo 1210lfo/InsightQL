@@ -81,6 +81,12 @@ class AnalyticsAgentState(TypedDict, total=False):
     evidence: Evidence | None
     recommendations: List[str]
     
+    # === Voice input ===
+    input_type: Literal["text", "voice"]
+    audio_transcript: str | None  # Original transcription from STT
+    audio_duration_seconds: float | None
+    voice_provider: str | None  # "groq", "local", etc.
+
     # === Control flow ===
     retry_count: int
     max_retries: int  # default: 2
@@ -141,6 +147,12 @@ def create_initial_state(
         evidence=None,
         recommendations=[],
         
+        # Voice input
+        input_type="text",
+        audio_transcript=None,
+        audio_duration_seconds=None,
+        voice_provider=None,
+
         # Control flow
         retry_count=0,
         max_retries=max_retries,
