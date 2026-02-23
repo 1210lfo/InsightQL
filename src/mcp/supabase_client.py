@@ -45,6 +45,11 @@ def get_supabase_client() -> Client:
 # Utilidad de paginación
 # =============================================================================
 
+# Columnas que SIEMPRE deben usar match exacto (eq) en vez de parcial (ilike '%val%')
+# Esto evita que "Vestidos" matchee "Vestidos de baño", o "Ropa" matchee "Ropa exterior" y "Ropa interior"
+_EXACT_MATCH_COLUMNS = {"segmento", "subcategoria", "categoria", "disponibilidad"}
+
+
 def _paginate_query(
     select_columns: str,
     filters: dict[str, Any] | None = None,
@@ -67,7 +72,7 @@ def _paginate_query(
         Lista con todos los registros
     """
     client = get_supabase_client()
-    use_eq_for = use_eq_for or []
+    use_eq_for = set(use_eq_for or []) | _EXACT_MATCH_COLUMNS
     filters = filters or {}
     
     # Asegurar que la columna de ordenamiento esté en la selección
@@ -114,7 +119,7 @@ def _paginate_query(
 def _get_total_count(filters: dict[str, Any] | None = None, use_eq_for: list[str] | None = None) -> int:
     """Obtiene el conteo total con filtros."""
     client = get_supabase_client()
-    use_eq_for = use_eq_for or []
+    use_eq_for = set(use_eq_for or []) | _EXACT_MATCH_COLUMNS
     filters = filters or {}
     
     query = client.table(TABLE_NAME).select("*", count="exact", head=True)
@@ -259,7 +264,7 @@ async def get_products_by_brand(
     client = get_supabase_client()
     query = client.table(TABLE_NAME).select("*").ilike("marca", f"%{marca}%")
     if categoria:
-        query = query.ilike("categoria", f"%{categoria}%")
+        query = query.eq("categoria", categoria)
     if segmento:
         query = query.eq("segmento", segmento)
     
@@ -293,9 +298,9 @@ async def get_products_by_category(
     total = _get_total_count(filters, use_eq_for=["segmento"] if segmento else [])
     
     client = get_supabase_client()
-    query = client.table(TABLE_NAME).select("*").ilike("categoria", f"%{categoria}%")
+    query = client.table(TABLE_NAME).select("*").eq("categoria", categoria)
     if subcategoria:
-        query = query.ilike("subcategoria", f"%{subcategoria}%")
+        query = query.eq("subcategoria", subcategoria)
     if marca:
         query = query.ilike("marca", f"%{marca}%")
     if segmento:
@@ -316,6 +321,8 @@ async def get_price_analysis(
     marca: str | None = None,
     categoria: str | None = None,
     segmento: str | None = None,
+    subcategoria: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
     Análisis de precios OPTIMIZADO con RPC.
@@ -326,6 +333,8 @@ async def get_price_analysis(
         "p_categoria": categoria,
         "p_segmento": segmento,
         "p_marca": marca,
+        "p_subcategoria": subcategoria,
+        "p_color": color,
     })
     
     if rpc_result:
@@ -358,6 +367,8 @@ async def get_price_analysis(
         filters["categoria"] = categoria
     if segmento:
         filters["segmento"] = segmento
+    if subcategoria:
+        filters["subcategoria"] = subcategoria
     
     use_eq = ["segmento"] if segmento else []
     
@@ -440,7 +451,7 @@ async def get_available_products(
     if marca:
         count_query = count_query.ilike("marca", f"%{marca}%")
     if categoria:
-        count_query = count_query.ilike("categoria", f"%{categoria}%")
+        count_query = count_query.eq("categoria", categoria)
     if segmento:
         count_query = count_query.eq("segmento", segmento)
     if talla:
@@ -453,7 +464,7 @@ async def get_available_products(
     if marca:
         query = query.ilike("marca", f"%{marca}%")
     if categoria:
-        query = query.ilike("categoria", f"%{categoria}%")
+        query = query.eq("categoria", categoria)
     if segmento:
         query = query.eq("segmento", segmento)
     if talla:
@@ -473,20 +484,38 @@ async def search_products(
     search_term: str,
     marca: str | None = None,
     categoria: str | None = None,
+    segmento: str | None = None,
+    disponibilidad: str | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
-    """Búsqueda de productos por texto."""
-    client = get_supabase_client()
+    """Búsqueda de productos por texto - OPTIMIZADO con RPC."""
+    rpc_result = _call_rpc("rpc_search_text", {
+        "p_search_term": search_term,
+        "p_marca": marca,
+        "p_categoria": categoria,
+        "p_segmento": segmento,
+        "p_disponibilidad": disponibilidad,
+        "p_limit": limit,
+    })
     
+    if rpc_result:
+        return {
+            "termino_busqueda": rpc_result.get("termino_busqueda", search_term),
+            "total_encontrados": rpc_result.get("total_encontrados", 0),
+            "productos": rpc_result.get("productos", []),
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
+    
+    # Fallback a REST (sin conteo total)
+    client = get_supabase_client()
     query = client.table(TABLE_NAME).select("*").or_(
         f"modelo.ilike.%{search_term}%,articulo.ilike.%{search_term}%,articulo_detalles.ilike.%{search_term}%"
     )
-    
     if marca:
         query = query.ilike("marca", f"%{marca}%")
     if categoria:
-        query = query.ilike("categoria", f"%{categoria}%")
-    
+        query = query.eq("categoria", categoria)
     result = query.limit(limit).execute()
     
     return {
@@ -503,83 +532,60 @@ async def get_discount_products(
     marca: str | None = None,
     categoria: str | None = None,
     segmento: str | None = None,
+    subcategoria: str | None = None,
+    color: str | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
-    """Productos con descuento con conteo total."""
-    filters = {}
-    if marca:
-        filters["marca"] = marca
-    if categoria:
-        filters["categoria"] = categoria
-    if segmento:
-        filters["segmento"] = segmento
+    """Productos con descuento - OPTIMIZADO con RPC."""
+    rpc_result = _call_rpc("rpc_discount_products", {
+        "p_categoria": categoria,
+        "p_segmento": segmento,
+        "p_marca": marca,
+        "p_subcategoria": subcategoria,
+        "p_color": color,
+        "p_limit": limit,
+    })
     
-    # Obtener todos para contar los que tienen descuento real
-    data = _paginate_query("precio, precio_final, descuento, articulo, modelo", filters, ["segmento"] if segmento else [])
+    if rpc_result:
+        return {
+            "total_con_descuento": rpc_result.get("total_con_descuento", 0),
+            "total_registros_analizados": rpc_result.get("total_registros_analizados", 0),
+            "porcentaje_con_descuento": rpc_result.get("porcentaje_con_descuento", 0),
+            "muestra_limit": limit,
+            "productos": rpc_result.get("productos", []),
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
     
-    productos_con_descuento = []
-    for row in data:
-        precio = row.get("precio")
-        precio_final = row.get("precio_final")
-        descuento = row.get("descuento")
-        
-        tiene_descuento = False
-        if descuento and str(descuento).strip() not in ["", "0", "0%", "null", "None"]:
-            tiene_descuento = True
-        elif precio and precio_final and float(precio_final) < float(precio):
-            tiene_descuento = True
-        
-        if tiene_descuento:
-            productos_con_descuento.append(row)
-    
-    return {
-        "total_con_descuento": len(productos_con_descuento),
-        "total_registros_analizados": len(data),
-        "porcentaje_con_descuento": round(len(productos_con_descuento) / len(data) * 100, 1) if data else 0,
-        "muestra_limit": limit,
-        "productos": productos_con_descuento[:limit],
-    }
+    return {"total_con_descuento": 0, "error": "RPC rpc_discount_products no disponible"}
 
 
 async def get_size_distribution(
     marca: str | None = None,
     categoria: str | None = None,
     segmento: str | None = None,
+    subcategoria: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
-    """Distribución de tallas COMPLETA (100% registros)."""
-    filters = {}
-    if marca:
-        filters["marca"] = marca
-    if categoria:
-        filters["categoria"] = categoria
-    if segmento:
-        filters["segmento"] = segmento
+    """Distribución de tallas - OPTIMIZADO con RPC."""
+    rpc_result = _call_rpc("rpc_size_distribution", {
+        "p_categoria": categoria,
+        "p_segmento": segmento,
+        "p_marca": marca,
+        "p_subcategoria": subcategoria,
+        "p_color": color,
+    })
     
-    data = _paginate_query("talla, disponibilidad", filters, ["segmento"] if segmento else [])
+    if rpc_result:
+        return {
+            "total_registros_analizados": rpc_result.get("total_registros_analizados", 0),
+            "total_tallas_unicas": rpc_result.get("total_tallas_unicas", 0),
+            "distribucion": rpc_result.get("distribucion", []),
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
     
-    tallas = {}
-    for row in data:
-        talla = row.get("talla", "Sin talla")
-        if talla not in tallas:
-            tallas[talla] = {"total": 0, "disponibles": 0}
-        tallas[talla]["total"] += 1
-        if row.get("disponibilidad") == "available":
-            tallas[talla]["disponibles"] += 1
-    
-    distribution = []
-    for talla, d in tallas.items():
-        distribution.append({
-            "talla": talla,
-            "total": d["total"],
-            "disponibles": d["disponibles"],
-            "porcentaje_disponible": round(d["disponibles"] / d["total"] * 100, 2) if d["total"] > 0 else 0,
-        })
-    
-    return {
-        "total_registros_analizados": len(data),
-        "total_tallas_unicas": len(distribution),
-        "distribucion": sorted(distribution, key=lambda x: x["total"], reverse=True),
-    }
+    return {"total_tallas_unicas": 0, "error": "RPC rpc_size_distribution no disponible"}
 
 
 async def get_top_priced_products(
@@ -642,13 +648,13 @@ async def get_top_priced_products(
     ).not_.is_("precio_final", "null")
     
     if categoria:
-        query = query.ilike("categoria", f"%{categoria}%")
+        query = query.eq("categoria", categoria)
     if segmento:
         query = query.eq("segmento", segmento)
     if marca:
         query = query.ilike("marca", f"%{marca}%")
     if subcategoria:
-        query = query.ilike("subcategoria", f"%{subcategoria}%")
+        query = query.eq("subcategoria", subcategoria)
     if color:
         query = query.ilike("color", f"%{color}%")
     if talla:
@@ -709,6 +715,8 @@ async def get_discount_analysis(
     categoria: str | None = None,
     segmento: str | None = None,
     marca: str | None = None,
+    subcategoria: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
     Análisis completo de descuentos del catálogo - OPTIMIZADO con RPC.
@@ -723,6 +731,8 @@ async def get_discount_analysis(
         "p_categoria": categoria,
         "p_segmento": segmento,
         "p_marca": marca,
+        "p_subcategoria": subcategoria,
+        "p_color": color,
     })
     
     if rpc_result:
@@ -747,6 +757,8 @@ async def get_discount_analysis(
         filters["segmento"] = segmento
     if marca:
         filters["marca"] = marca
+    if subcategoria:
+        filters["subcategoria"] = subcategoria
     
     use_eq = ["segmento"] if segmento else []
     data = _paginate_query("precio, precio_final, descuento, articulo", filters, use_eq)
@@ -807,6 +819,7 @@ async def get_availability_analysis(
     categoria: str | None = None,
     segmento: str | None = None,
     marca: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
     Análisis de disponibilidad del catálogo - OPTIMIZADO con RPC.
@@ -820,6 +833,7 @@ async def get_availability_analysis(
         "p_categoria": categoria,
         "p_segmento": segmento,
         "p_marca": marca,
+        "p_color": color,
     })
     
     if rpc_result:
@@ -912,231 +926,121 @@ async def get_availability_analysis(
 async def get_segment_price_comparison(
     marca: str | None = None,
     categoria: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
-    Compara precios entre segmentos (Hombre vs Mujer vs Unisex).
-    
-    Responde preguntas como:
-    - ¿Cuál es la diferencia de precio entre Hombre y Mujer?
-    - ¿Qué segmento es más caro?
+    Compara precios entre segmentos (Hombre vs Mujer vs Unisex) - OPTIMIZADO con RPC.
     """
-    segmentos = ["Hombre", "Mujer", "Unisex"]
-    comparacion = []
+    # Usar RPC existente (1 query en vez de 3 paginaciones completas)
+    rpc_result = _call_rpc("rpc_segment_price_comparison", {
+        "p_categoria": categoria,
+        "p_marca": marca,
+        "p_color": color,
+    })
     
-    for seg in segmentos:
-        # Obtener datos del segmento
-        filters = {"segmento": seg}
-        if marca:
-            filters["marca"] = marca
-        if categoria:
-            filters["categoria"] = categoria
-        data = _paginate_query("precio, precio_final", filters, ["segmento"])
-        
-        precios = [float(r["precio"]) for r in data if r.get("precio")]
-        precios_finales = [float(r["precio_final"]) for r in data if r.get("precio_final")]
-        
-        if precios_finales:
-            comparacion.append({
-                "segmento": seg,
-                "total_productos": len(data),
-                "precio_promedio": round(sum(precios) / len(precios), 0) if precios else 0,
-                "precio_final_promedio": round(sum(precios_finales) / len(precios_finales), 0),
-                "precio_minimo": min(precios_finales),
-                "precio_maximo": max(precios_finales),
-                "descuento_promedio": round((1 - sum(precios_finales)/sum(precios)) * 100, 1) if precios else 0,
-            })
+    if rpc_result:
+        comparacion = rpc_result.get("comparacion_segmentos", [])
+        return {
+            "comparacion_segmentos": comparacion,
+            "segmento_mas_caro": comparacion[0]["segmento"] if comparacion else None,
+            "segmento_mas_barato": comparacion[-1]["segmento"] if comparacion else None,
+            "diferencia_precio_promedio": (
+                comparacion[0].get("precio_final_promedio", 0) - comparacion[-1].get("precio_final_promedio", 0)
+            ) if len(comparacion) >= 2 else 0,
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
     
-    # Ordenar por precio final promedio
-    comparacion = sorted(comparacion, key=lambda x: x["precio_final_promedio"], reverse=True)
-    
-    # Calcular diferencias
-    if len(comparacion) >= 2:
-        diferencia_max_min = comparacion[0]["precio_final_promedio"] - comparacion[-1]["precio_final_promedio"]
-    else:
-        diferencia_max_min = 0
-    
-    return {
-        "comparacion_segmentos": comparacion,
-        "segmento_mas_caro": comparacion[0]["segmento"] if comparacion else None,
-        "segmento_mas_barato": comparacion[-1]["segmento"] if comparacion else None,
-        "diferencia_precio_promedio": diferencia_max_min,
-        "filtros": {"marca": marca, "categoria": categoria},
-    }
+    # Fallback mínimo (no debería llegar aquí)
+    return {"comparacion_segmentos": [], "error": "RPC rpc_segment_price_comparison no disponible"}
 
 
 async def get_category_price_comparison(
     marca: str | None = None,
     segmento: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
-    Compara precios entre categorías (Calzado vs Ropa, etc.).
-    
-    Responde preguntas como:
-    - ¿Qué categoría es más cara?
-    - Comparar precios entre categorías
+    Compara precios entre categorías (Calzado vs Ropa, etc.) - OPTIMIZADO con RPC.
     """
-    filters = {}
-    if marca:
-        filters["marca"] = marca
-    if segmento:
-        filters["segmento"] = segmento
+    rpc_result = _call_rpc("rpc_category_price_comparison", {
+        "p_marca": marca,
+        "p_segmento": segmento,
+        "p_color": color,
+    })
     
-    use_eq = ["segmento"] if segmento else []
-    data = _paginate_query("categoria, precio, precio_final, descuento", filters, use_eq)
+    if rpc_result:
+        comparacion = rpc_result.get("comparacion_categorias", [])
+        return {
+            "comparacion_categorias": comparacion,
+            "categoria_mas_cara": comparacion[0]["categoria"] if comparacion else None,
+            "categoria_mas_barata": comparacion[-1]["categoria"] if comparacion else None,
+            "total_categorias": len(comparacion),
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
     
-    categorias = {}
-    for row in data:
-        cat = row.get("categoria", "Sin categoría")
-        if cat not in categorias:
-            categorias[cat] = {"precios": [], "precios_finales": [], "total": 0}
-        
-        categorias[cat]["total"] += 1
-        if row.get("precio"):
-            categorias[cat]["precios"].append(float(row["precio"]))
-        if row.get("precio_final"):
-            categorias[cat]["precios_finales"].append(float(row["precio_final"]))
-    
-    comparacion = []
-    for cat, d in categorias.items():
-        if d["precios_finales"]:
-            prom_orig = sum(d["precios"]) / len(d["precios"]) if d["precios"] else 0
-            prom_final = sum(d["precios_finales"]) / len(d["precios_finales"])
-            comparacion.append({
-                "categoria": cat,
-                "total_productos": d["total"],
-                "precio_promedio_original": round(prom_orig, 0),
-                "precio_promedio_final": round(prom_final, 0),
-                "precio_minimo": min(d["precios_finales"]),
-                "precio_maximo": max(d["precios_finales"]),
-                "descuento_promedio_pct": round((1 - prom_final/prom_orig) * 100, 1) if prom_orig > 0 else 0,
-            })
-    
-    comparacion = sorted(comparacion, key=lambda x: x["precio_promedio_final"], reverse=True)
-    
-    return {
-        "comparacion_categorias": comparacion,
-        "categoria_mas_cara": comparacion[0]["categoria"] if comparacion else None,
-        "categoria_mas_barata": comparacion[-1]["categoria"] if comparacion else None,
-        "total_categorias": len(comparacion),
-        "filtros": {"marca": marca, "segmento": segmento},
-    }
+    return {"comparacion_categorias": [], "error": "RPC rpc_category_price_comparison no disponible"}
 
 
 async def get_subcategory_distribution(
     categoria: str | None = None,
     segmento: str | None = None,
     marca: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
-    Distribución de productos por subcategoría.
-    
-    Responde preguntas como:
-    - ¿Cuántos productos hay por subcategoría?
-    - ¿Cuál es la subcategoría con más productos?
+    Distribución de productos por subcategoría - OPTIMIZADO con RPC.
     """
-    filters = {}
-    if categoria:
-        filters["categoria"] = categoria
-    if segmento:
-        filters["segmento"] = segmento
-    if marca:
-        filters["marca"] = marca
+    rpc_result = _call_rpc("rpc_subcategory_distribution", {
+        "p_categoria": categoria,
+        "p_segmento": segmento,
+        "p_marca": marca,
+        "p_color": color,
+    })
     
-    use_eq = ["segmento"] if segmento else []
-    data = _paginate_query("subcategoria, categoria, precio_final", filters, use_eq)
+    if rpc_result:
+        distribucion = rpc_result.get("distribucion", [])
+        return {
+            "total_registros": rpc_result.get("total_registros", 0),
+            "total_subcategorias": len(distribucion),
+            "distribucion": distribucion,
+            "subcategoria_principal": distribucion[0]["subcategoria"] if distribucion else None,
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
     
-    subcategorias = {}
-    for row in data:
-        subcat = row.get("subcategoria", "Sin subcategoría")
-        if subcat not in subcategorias:
-            subcategorias[subcat] = {"total": 0, "precios": []}
-        subcategorias[subcat]["total"] += 1
-        if row.get("precio_final"):
-            subcategorias[subcat]["precios"].append(float(row["precio_final"]))
-    
-    distribucion = []
-    total_general = len(data)
-    for subcat, d in subcategorias.items():
-        prom = sum(d["precios"]) / len(d["precios"]) if d["precios"] else 0
-        distribucion.append({
-            "subcategoria": subcat,
-            "total_productos": d["total"],
-            "porcentaje_catalogo": round(d["total"] / total_general * 100, 1) if total_general > 0 else 0,
-            "precio_promedio": round(prom, 0),
-        })
-    
-    distribucion = sorted(distribucion, key=lambda x: x["total_productos"], reverse=True)
-    
-    return {
-        "total_registros": total_general,
-        "total_subcategorias": len(distribucion),
-        "distribucion": distribucion,
-        "subcategoria_principal": distribucion[0]["subcategoria"] if distribucion else None,
-        "filtros": {"categoria": categoria, "segmento": segmento, "marca": marca},
-    }
+    return {"distribucion": [], "error": "RPC rpc_subcategory_distribution no disponible"}
 
 
 async def get_model_variety_analysis(
     categoria: str | None = None,
     segmento: str | None = None,
     marca: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
-    Análisis de variedad de modelos y colores.
-    
-    Responde preguntas como:
-    - ¿Cuántos modelos/colores únicos hay?
-    - ¿Qué modelo tiene más variantes?
+    Análisis de variedad de modelos y colores - OPTIMIZADO con RPC.
     """
-    filters = {}
-    if categoria:
-        filters["categoria"] = categoria
-    if segmento:
-        filters["segmento"] = segmento
-    if marca:
-        filters["marca"] = marca
+    rpc_result = _call_rpc("rpc_model_variety", {
+        "p_categoria": categoria,
+        "p_segmento": segmento,
+        "p_marca": marca,
+        "p_color": color,
+    })
     
-    use_eq = ["segmento"] if segmento else []
-    data = _paginate_query("articulo, modelo, color, talla", filters, use_eq)
+    if rpc_result:
+        return {
+            "total_registros": rpc_result.get("total_registros", 0),
+            "articulos_unicos": rpc_result.get("articulos_unicos", 0),
+            "modelos_colores_unicos": rpc_result.get("modelos_colores_unicos", 0),
+            "promedio_variantes_por_articulo": rpc_result.get("promedio_variantes_por_articulo", 0),
+            "top_15_articulos_con_mas_variantes": rpc_result.get("top_15_articulos_con_mas_variantes", []),
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
     
-    articulos = {}
-    colores_unicos = set()
-    modelos_unicos = set()
-    
-    for row in data:
-        articulo = row.get("articulo", "Sin artículo")
-        modelo = row.get("modelo", "")
-        color = row.get("color", "")
-        
-        if articulo not in articulos:
-            articulos[articulo] = {"variantes": 0, "colores": set(), "tallas": set()}
-        
-        articulos[articulo]["variantes"] += 1
-        if modelo:
-            articulos[articulo]["colores"].add(modelo)
-            modelos_unicos.add(modelo)
-        if color:
-            colores_unicos.add(color)
-    
-    # Top artículos con más variantes
-    top_articulos = []
-    for art, d in articulos.items():
-        top_articulos.append({
-            "articulo": art,
-            "total_variantes": d["variantes"],
-            "colores_unicos": len(d["colores"]),
-        })
-    
-    top_articulos = sorted(top_articulos, key=lambda x: x["total_variantes"], reverse=True)[:15]
-    
-    return {
-        "total_registros": len(data),
-        "articulos_unicos": len(articulos),
-        "modelos_colores_unicos": len(modelos_unicos),
-        "promedio_variantes_por_articulo": round(len(data) / len(articulos), 1) if articulos else 0,
-        "top_15_articulos_con_mas_variantes": top_articulos,
-        "filtros": {"categoria": categoria, "segmento": segmento, "marca": marca},
-    }
+    return {"articulos_unicos": 0, "error": "RPC rpc_model_variety no disponible"}
 
 
 # NOTA: get_price_range_distribution fue eliminada - usar get_price_distribution() que está optimizada
@@ -1147,6 +1051,7 @@ async def get_best_deals(
     segmento: str | None = None,
     marca: str | None = None,
     disponibilidad: str | None = None,
+    color: str | None = None,
     limit: int = 10,
 ) -> dict[str, Any]:
     """
@@ -1162,6 +1067,7 @@ async def get_best_deals(
         "p_segmento": segmento,
         "p_marca": marca,
         "p_disponibilidad": disponibilidad,
+        "p_color": color,
         "p_limit": limit,
     })
     
@@ -1174,31 +1080,31 @@ async def get_best_deals(
             "_optimized": True,
         }
     
-    # Fallback a paginación (si RPC falla)
-    filters = {}
+    # Fallback ligero: solo REST limitado (NO paginar todo el catálogo)
+    client = get_supabase_client()
+    query = client.table(TABLE_NAME).select(
+        "articulo, modelo, precio, precio_final, descuento, categoria, segmento"
+    ).gt("descuento", 0).order("descuento", desc=True).limit(limit)
     if categoria:
-        filters["categoria"] = categoria
+        query = query.eq("categoria", categoria)
     if segmento:
-        filters["segmento"] = segmento
+        query = query.eq("segmento", segmento)
     if marca:
-        filters["marca"] = marca
-    
-    use_eq = ["segmento"] if segmento else []
-    data = _paginate_query("articulo, modelo, precio, precio_final, descuento, categoria, segmento", filters, use_eq)
+        query = query.ilike("marca", f"%{marca}%")
+    if disponibilidad:
+        query = query.eq("disponibilidad", disponibilidad)
+    result = query.execute()
+    data = result.data or []
     
     ofertas = []
     for row in data:
         precio = row.get("precio")
         precio_final = row.get("precio_final")
-        
         if precio and precio_final:
             precio = float(precio)
             precio_final = float(precio_final)
-            
             if precio_final < precio:
                 ahorro = precio - precio_final
-                descuento_pct = (ahorro / precio) * 100
-                
                 ofertas.append({
                     "articulo": row.get("articulo"),
                     "modelo": row.get("modelo"),
@@ -1207,20 +1113,71 @@ async def get_best_deals(
                     "precio_original": precio,
                     "precio_final": precio_final,
                     "ahorro": ahorro,
-                    "descuento_porcentaje": round(descuento_pct, 1),
+                    "descuento_porcentaje": round((ahorro / precio) * 100, 1),
                 })
-    
-    # Ordenar por mayor ahorro absoluto
-    mejores_por_ahorro = sorted(ofertas, key=lambda x: x["ahorro"], reverse=True)[:limit]
-    
-    # Ordenar por mayor porcentaje de descuento
-    mejores_por_porcentaje = sorted(ofertas, key=lambda x: x["descuento_porcentaje"], reverse=True)[:limit]
     
     return {
         "total_productos_con_descuento": len(ofertas),
-        "mejores_por_ahorro_absoluto": mejores_por_ahorro,
-        "mejores_por_porcentaje_descuento": mejores_por_porcentaje,
+        "mejores_por_ahorro_absoluto": ofertas,
+        "mejores_por_porcentaje_descuento": sorted(ofertas, key=lambda x: x["descuento_porcentaje"], reverse=True),
         "filtros": {"categoria": categoria, "segmento": segmento, "marca": marca},
+        "_note": "Fallback REST limitado, RPC rpc_best_deals no disponible",
+    }
+
+
+async def get_article_available_sizes(
+    articulo: str,
+) -> dict[str, Any]:
+    """
+    Tallas disponibles de un artículo específico - OPTIMIZADO con RPC.
+    
+    Dado un artículo, devuelve qué tallas están disponibles y cuántas
+    unidades hay de cada talla con stock.
+    
+    Responde preguntas como:
+    - ¿Qué tallas hay disponibles del Superstar?
+    - ¿Cuántas unidades de cada talla quedan del Air Force 1?
+    """
+    rpc_result = _call_rpc("rpc_article_available_sizes", {
+        "p_articulo": articulo,
+    })
+    
+    if rpc_result:
+        return {
+            "info_articulo": rpc_result.get("info_articulo", {}),
+            "total_disponibles": rpc_result.get("total_disponibles", 0),
+            "total_agotados": rpc_result.get("total_agotados", 0),
+            "tallas_disponibles": rpc_result.get("tallas_disponibles", 0),
+            "detalle_tallas": rpc_result.get("detalle_tallas", []),
+            "_optimized": True,
+        }
+    
+    # Fallback REST limitado
+    client = get_supabase_client()
+    result = client.table(TABLE_NAME).select(
+        "talla"
+    ).ilike(
+        "articulo", f"%{articulo}%"
+    ).eq(
+        "disponibilidad", "available"
+    ).execute()
+    
+    conteo: dict[str, int] = {}
+    for row in result.data or []:
+        t = row.get("talla")
+        if t:
+            conteo[t] = conteo.get(t, 0) + 1
+    
+    detalle = sorted(
+        [{"talla": k, "cantidad_disponible": v} for k, v in conteo.items()],
+        key=lambda x: x["cantidad_disponible"],
+        reverse=True,
+    )
+    
+    return {
+        "total_disponibles": sum(conteo.values()),
+        "tallas_disponibles": len(conteo),
+        "detalle_tallas": detalle,
     }
 
 
@@ -1233,37 +1190,43 @@ async def count_products_by_price(
     color: str | None = None,
     subcategoria: str | None = None,
     disponibilidad: str | None = None,
+    talla: str | None = None,
     usar_precio_final: bool = True,
 ) -> dict[str, Any]:
     """
-    Cuenta productos por rango de precio y/o atributos con filtros opcionales.
-    
-    Esta función permite responder preguntas como:
-    - "¿Cuántos productos de calzado hombre cuestan más de 500000?"
-    - "¿Cuántos productos hay entre 100000 y 300000?"
-    - "¿Cuántos productos de calzado hombre en color blanco hay?"
-    - "¿Cuántos tenis negros de mujer hay?"
-    
-    Args:
-        precio_min: Precio mínimo (mayor o igual)
-        precio_max: Precio máximo (menor o igual)
-        categoria: Filtrar por categoría (Calzado, Ropa, etc.)
-        segmento: Filtrar por segmento (Hombre, Mujer, Unisex)
-        marca: Filtrar por marca
-        color: Filtrar por color (Blanco, Negro, Azul, etc.)
-        subcategoria: Filtrar por subcategoría (Tenis, Camisetas, etc.)
-        disponibilidad: Filtrar por disponibilidad (available, sold_out)
-        usar_precio_final: True=precio_final, False=precio original
+    Cuenta productos con filtros múltiples + estadísticas - OPTIMIZADO con RPC.
     """
+    rpc_result = _call_rpc("rpc_count_by_filters", {
+        "p_categoria": categoria,
+        "p_segmento": segmento,
+        "p_marca": marca,
+        "p_color": color,
+        "p_subcategoria": subcategoria,
+        "p_talla": talla,
+        "p_disponibilidad": disponibilidad,
+        "p_precio_min": precio_min,
+        "p_precio_max": precio_max,
+    })
+    
+    if rpc_result:
+        count = rpc_result.get("total_productos", 0)
+        return {
+            "total_productos": count,
+            "precio_promedio": rpc_result.get("precio_promedio", 0),
+            "precio_minimo": rpc_result.get("precio_minimo", 0),
+            "precio_maximo": rpc_result.get("precio_maximo", 0),
+            "filtros": rpc_result.get("filtros", {}),
+            "columna_precio": "precio_final",
+            "descripcion": f"Se encontraron {count:,} productos que cumplen los criterios",
+            "_optimized": True,
+        }
+    
+    # Fallback a REST count
     client = get_supabase_client()
     precio_col = "precio_final" if usar_precio_final else "precio"
-    
-    # Construir consulta con filtros
     query = client.table(TABLE_NAME).select("*", count="exact", head=True)
-    
-    # Filtros de texto
     if categoria:
-        query = query.ilike("categoria", f"%{categoria}%")
+        query = query.eq("categoria", categoria)
     if segmento:
         query = query.eq("segmento", segmento)
     if marca:
@@ -1271,41 +1234,19 @@ async def count_products_by_price(
     if color:
         query = query.ilike("color", f"%{color}%")
     if subcategoria:
-        query = query.ilike("subcategoria", f"%{subcategoria}%")
+        query = query.eq("subcategoria", subcategoria)
+    if talla:
+        query = query.ilike("talla", f"%{talla}%")
     if disponibilidad:
         query = query.eq("disponibilidad", disponibilidad)
-    
-    # Filtros de precio
     if precio_min is not None:
-        query = query.gt(precio_col, precio_min)
+        query = query.gte(precio_col, precio_min)
     if precio_max is not None:
         query = query.lte(precio_col, precio_max)
-    
     result = query.execute()
     count = result.count or 0
-    
-    # Construir descripción de filtros
-    filtros = []
-    if categoria:
-        filtros.append(f"categoria={categoria}")
-    if segmento:
-        filtros.append(f"segmento={segmento}")
-    if marca:
-        filtros.append(f"marca={marca}")
-    if color:
-        filtros.append(f"color={color}")
-    if subcategoria:
-        filtros.append(f"subcategoria={subcategoria}")
-    if disponibilidad:
-        filtros.append(f"disponibilidad={disponibilidad}")
-    if precio_min is not None:
-        filtros.append(f"{precio_col} > {precio_min:,.0f}")
-    if precio_max is not None:
-        filtros.append(f"{precio_col} <= {precio_max:,.0f}")
-    
     return {
         "total_productos": count,
-        "filtros_aplicados": filtros if filtros else ["ninguno"],
         "columna_precio": precio_col,
         "descripcion": f"Se encontraron {count:,} productos que cumplen los criterios",
     }
@@ -1315,73 +1256,28 @@ async def get_price_distribution(
     categoria: str | None = None,
     segmento: str | None = None,
     marca: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
-    Distribución de productos por rangos de precio - OPTIMIZADA.
-    Usa una sola query en lugar de 8 queries separadas.
+    Distribución de productos por rangos de precio - OPTIMIZADO con RPC.
+    1 sola query PostgreSQL en vez de paginar 337k registros.
     """
-    # Construir filtros
-    filters = {}
-    if categoria:
-        filters["categoria"] = categoria
-    if segmento:
-        filters["segmento"] = segmento
-    if marca:
-        filters["marca"] = marca
+    rpc_result = _call_rpc("rpc_price_distribution", {
+        "p_categoria": categoria,
+        "p_segmento": segmento,
+        "p_marca": marca,
+        "p_color": color,
+    })
     
-    use_eq = ["segmento"] if segmento else []
+    if rpc_result:
+        return {
+            "total_productos": rpc_result.get("total_productos", 0),
+            "distribucion": rpc_result.get("distribucion", []),
+            "filtros": rpc_result.get("filtros", {}),
+            "_optimized": True,
+        }
     
-    # Una sola query para obtener todos los precios
-    data = _paginate_query("precio_final", filters, use_eq)
-    
-    # Rangos de precio predefinidos
-    rangos = [
-        (0, 100000, "0-100k"),
-        (100000, 200000, "100k-200k"),
-        (200000, 300000, "200k-300k"),
-        (300000, 400000, "300k-400k"),
-        (400000, 500000, "400k-500k"),
-        (500000, 750000, "500k-750k"),
-        (750000, 1000000, "750k-1M"),
-        (1000000, float('inf'), ">1M"),
-    ]
-    
-    # Contar en cada rango
-    conteos = {r[2]: 0 for r in rangos}
-    total_con_precio = 0
-    
-    for row in data:
-        precio = row.get("precio_final")
-        if precio:
-            precio = float(precio)
-            total_con_precio += 1
-            for min_p, max_p, label in rangos:
-                if min_p <= precio < max_p:
-                    conteos[label] += 1
-                    break
-    
-    # Construir resultado
-    distribucion = []
-    for min_p, max_p, label in rangos:
-        count = conteos[label]
-        distribucion.append({
-            "rango": label,
-            "precio_min": min_p,
-            "precio_max": max_p if max_p != float('inf') else None,
-            "cantidad": count,
-            "porcentaje": round(count / total_con_precio * 100, 1) if total_con_precio > 0 else 0,
-        })
-    
-    return {
-        "total_productos": total_con_precio,
-        "distribucion": distribucion,
-        "filtros": {
-            "categoria": categoria,
-            "segmento": segmento,
-            "marca": marca,
-        },
-        "_optimized": True,
-    }
+    return {"total_productos": 0, "distribucion": [], "error": "RPC rpc_price_distribution no disponible"}
 
 
 # =============================================================================
@@ -1427,6 +1323,8 @@ async def execute_query(
                 marca=parameters.get("marca"),
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
+                subcategoria=parameters.get("subcategoria"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_available_products":
@@ -1443,6 +1341,8 @@ async def execute_query(
                 search_term=parameters.get("search_term", parameters.get("p_search_term", "")),
                 marca=parameters.get("marca"),
                 categoria=parameters.get("categoria"),
+                segmento=parameters.get("segmento"),
+                disponibilidad=parameters.get("disponibilidad"),
                 limit=parameters.get("limit", 10),
             )
         
@@ -1453,6 +1353,8 @@ async def execute_query(
                 marca=parameters.get("marca"),
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
+                subcategoria=parameters.get("subcategoria"),
+                color=parameters.get("color"),
                 limit=parameters.get("limit", 10),
             )
         
@@ -1461,6 +1363,8 @@ async def execute_query(
                 marca=parameters.get("marca"),
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
+                subcategoria=parameters.get("subcategoria"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_brand_catalog":
@@ -1476,6 +1380,7 @@ async def execute_query(
                 color=parameters.get("color"),
                 subcategoria=parameters.get("subcategoria"),
                 disponibilidad=parameters.get("disponibilidad"),
+                talla=parameters.get("talla"),
                 usar_precio_final=parameters.get("usar_precio_final", True),
             )
         
@@ -1484,6 +1389,7 @@ async def execute_query(
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_top_priced_products":
@@ -1506,6 +1412,8 @@ async def execute_query(
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
+                subcategoria=parameters.get("subcategoria"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_availability_analysis":
@@ -1513,18 +1421,21 @@ async def execute_query(
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_segment_price_comparison":
             return await get_segment_price_comparison(
                 marca=parameters.get("marca"),
                 categoria=parameters.get("categoria"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_category_price_comparison":
             return await get_category_price_comparison(
                 marca=parameters.get("marca"),
                 segmento=parameters.get("segmento"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_subcategory_distribution":
@@ -1532,6 +1443,7 @@ async def execute_query(
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
+                color=parameters.get("color"),
             )
         
         elif function_name == "get_model_variety_analysis":
@@ -1539,14 +1451,10 @@ async def execute_query(
                 categoria=parameters.get("categoria"),
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
+                color=parameters.get("color"),
             )
         
-        elif function_name == "get_price_range_distribution":
-            return await get_price_range_distribution(
-                categoria=parameters.get("categoria"),
-                segmento=parameters.get("segmento"),
-                marca=parameters.get("marca"),
-            )
+        # get_price_range_distribution eliminada - usar get_price_distribution
         
         elif function_name == "get_best_deals":
             return await get_best_deals(
@@ -1554,7 +1462,13 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
                 disponibilidad=parameters.get("disponibilidad"),
+                color=parameters.get("color"),
                 limit=parameters.get("limit", 10),
+            )
+        
+        elif function_name == "get_article_available_sizes":
+            return await get_article_available_sizes(
+                articulo=parameters.get("articulo", parameters.get("p_articulo", "")),
             )
         
         else:

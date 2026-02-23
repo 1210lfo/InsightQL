@@ -107,9 +107,9 @@ def _get_fashion_schema(scope: str) -> dict[str, Any]:
         },
         {
             "name": "get_price_analysis",
-            "description": "Análisis de precios (promedio, min, max, descuentos)",
-            "parameters": ["group_by: marca|categoria|segmento|subcategoria", "marca", "categoria", "segmento"],
-            "example": "get_price_analysis('marca', null, 'Calzado')",
+            "description": "Análisis de precios (promedio, min, max, descuentos) con filtro de subcategoría",
+            "parameters": ["group_by: marca|categoria|segmento|subcategoria", "marca", "categoria", "segmento", "subcategoria"],
+            "example": "get_price_analysis(subcategoria='Vestidos', marca='H&M')",
         },
         {
             "name": "get_available_products",
@@ -168,9 +168,9 @@ def _get_fashion_schema(scope: str) -> dict[str, Any]:
         },
         {
             "name": "get_discount_analysis",
-            "description": "Análisis completo de descuentos: promedio, total con descuento, ahorro total, top 10 mayor descuento",
-            "parameters": ["categoria", "segmento", "marca"],
-            "example": "get_discount_analysis('Calzado', 'Hombre')",
+            "description": "Análisis completo de descuentos: promedio, total con descuento, ahorro total, top 10 mayor descuento. Soporta filtro de subcategoría.",
+            "parameters": ["categoria", "segmento", "marca", "subcategoria"],
+            "example": "get_discount_analysis(subcategoria='Tenis', marca='Nike')",
         },
         {
             "name": "get_availability_analysis",

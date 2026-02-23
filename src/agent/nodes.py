@@ -308,7 +308,7 @@ Convierte la intención del usuario en una llamada a función RPC con parámetro
 ## 💰 PRECIOS Y PRODUCTOS ESPECÍFICOS
 | Función | Parámetros | Uso |
 |---------|------------|-----|
-| get_price_analysis | marca?, categoria?, segmento? | Estadísticas de precio |
+| get_price_analysis | marca?, categoria?, segmento?, **subcategoria?** | Estadísticas de precio (promedio, min, max) con filtro de subcategoría |
 | **get_top_priced_products** | categoria?, segmento?, marca?, **subcategoria?**, **color?**, **talla?**, **disponibilidad?**, orden?, limit? | **MÁS CAROS/BARATOS con filtros avanzados** |
 | count_products_by_price | precio_min?, precio_max?, categoria?, segmento?, marca?, color?, subcategoria?, talla?, disponibilidad? | Conteos con filtros múltiples |
 | get_price_distribution | categoria?, segmento?, marca? | Distribución por rangos |
@@ -318,7 +318,7 @@ Convierte la intención del usuario en una llamada a función RPC con parámetro
 ## 🏷️ DESCUENTOS
 | Función | Parámetros | Uso |
 |---------|------------|-----|
-| get_discount_analysis | categoria?, segmento?, marca? | % descuento, ahorro total |
+| get_discount_analysis | categoria?, segmento?, marca?, **subcategoria?** | % descuento, ahorro total (con filtro de subcategoría) |
 | **get_best_deals** | categoria?, segmento?, marca?, **disponibilidad?**, limit? | **Mejores ofertas** (disponibilidad="available" para solo disponibles) |
 | get_discount_products | marca?, categoria?, segmento?, limit? | Lista de productos con descuento |
 
@@ -374,6 +374,15 @@ Convierte la intención del usuario en una llamada a función RPC con parámetro
 
 "precio promedio calzado hombre"
 → get_price_analysis(categoria="Calzado", segmento="Hombre")
+
+"precio promedio de vestidos de H&M"
+→ get_price_analysis(subcategoria="Vestidos", marca="H&M")
+
+"precio promedio de chaquetas de hombre en Zara"
+→ get_price_analysis(subcategoria="Chaquetas", segmento="Hombre", marca="Zara")
+
+"descuento promedio en tenis Nike"
+→ get_discount_analysis(subcategoria="Tenis", marca="Nike")
 
 "cuántos tenis negros de mujer > 300000"
 → count_products_by_price(subcategoria="Tenis", color="Negro", segmento="Mujer", precio_min=300000)
