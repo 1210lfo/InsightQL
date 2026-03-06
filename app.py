@@ -7,7 +7,15 @@ import streamlit as st
 import streamlit.components.v1 as components
 import asyncio
 import re
+import nest_asyncio
 from datetime import datetime
+
+# Patch event loop to allow nested asyncio.run() calls
+# Required for Streamlit Cloud which runs inside Tornado's event loop
+try:
+    nest_asyncio.apply()
+except Exception:
+    pass
 
 # Configuración de página - DEBE IR PRIMERO
 st.set_page_config(
@@ -107,12 +115,28 @@ from src.mcp.supabase_client import get_catalog_summary
 # ESTADÍSTICAS DINÁMICAS DEL CATÁLOGO (cacheadas por sesión)
 # =============================================================================
 
+def _safe_async_run(coro):
+    """Run an async coroutine safely, handling already-running event loops."""
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+
+    if loop and loop.is_running():
+        # We're inside an existing event loop (e.g. Streamlit Cloud / Tornado)
+        import concurrent.futures
+        with concurrent.futures.ThreadPoolExecutor() as pool:
+            future = pool.submit(asyncio.run, coro)
+            return future.result(timeout=60)
+    else:
+        return asyncio.run(coro)
+
+
 @st.cache_data(ttl=3600, show_spinner=False)
 def _load_catalog_stats() -> dict:
     """Carga estadísticas del catálogo desde Supabase (cacheado 1 hora)."""
     try:
-        import asyncio
-        summary = asyncio.run(get_catalog_summary())
+        summary = _safe_async_run(get_catalog_summary())
         total = summary.get("total_registros", 0)
         disponibles = summary.get("productos_disponibles", 0)
         precio_prom = summary.get("precio_promedio", 0)
@@ -626,12 +650,12 @@ st.markdown("""
 
 def run_query(query: str) -> dict:
     """Ejecuta una consulta al agente."""
-    return asyncio.run(run_analytics_query(query))
+    return _safe_async_run(run_analytics_query(query))
 
 
 def run_voice(audio_bytes: bytes, audio_format: str = "wav") -> dict:
     """Ejecuta una consulta por voz al agente."""
-    return asyncio.run(run_voice_query(audio_bytes, audio_format))
+    return _safe_async_run(run_voice_query(audio_bytes, audio_format))
 
 
 def format_response(response: dict) -> str:
