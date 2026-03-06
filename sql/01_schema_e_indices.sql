@@ -162,6 +162,24 @@ WHERE disponibilidad = 'available';
 
 
 -- ============================================================================
+-- ÍNDICES TRIGRAM (para búsquedas ILIKE '%texto%' eficientes)
+-- ============================================================================
+-- Requiere: CREATE EXTENSION IF NOT EXISTS pg_trgm;
+-- Ejecutar primero en Supabase SQL Editor.
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+CREATE INDEX IF NOT EXISTS idx_fact_articulo_trgm
+ON fact_table USING gin (articulo gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_fact_marca_trgm
+ON fact_table USING gin (marca gin_trgm_ops);
+
+CREATE INDEX IF NOT EXISTS idx_fact_color_trgm
+ON fact_table USING gin (color gin_trgm_ops);
+
+
+-- ============================================================================
 -- VERIFICACIÓN
 -- ============================================================================
 -- SELECT indexname, indexdef FROM pg_indexes WHERE tablename = 'fact_table';

@@ -986,6 +986,7 @@ ALTER FUNCTION public.rpc_search_products_advanced(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT
 -- ============================================================================
 -- 16. rpc_article_available_sizes - Tallas disponibles de un artículo
 --     Params: p_articulo, p_marca, p_color
+--     OPTIMIZADO: CTE único en vez de 4 scans; requiere idx GIN pg_trgm
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_article_available_sizes(
@@ -994,65 +995,58 @@ CREATE OR REPLACE FUNCTION public.rpc_article_available_sizes(
     p_color TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
-DECLARE
-    v_total_disponibles BIGINT;
-    v_total_agotados BIGINT;
-    tallas_json JSON;
-    info_json JSON;
 BEGIN
-    -- Info básica del artículo
-    SELECT json_build_object(
-        'articulo', MIN(articulo),
-        'marca', MIN(marca),
-        'categoria', MIN(categoria),
-        'subcategoria', MIN(subcategoria),
-        'segmento', MIN(segmento),
-        'precio_min', MIN(precio_final),
-        'precio_max', MAX(precio_final)
-    ) INTO info_json
-    FROM fact_table
-    WHERE articulo ILIKE '%' || p_articulo || '%'
-      AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
-      AND (p_color IS NULL OR color ILIKE '%' || p_color || '%');
-
-    -- Conteos globales
-    SELECT
-        COUNT(*) FILTER (WHERE disponibilidad = 'available'),
-        COUNT(*) FILTER (WHERE disponibilidad != 'available')
-    INTO v_total_disponibles, v_total_agotados
-    FROM fact_table
-    WHERE articulo ILIKE '%' || p_articulo || '%'
-      AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
-      AND (p_color IS NULL OR color ILIKE '%' || p_color || '%');
-
-    -- Tallas disponibles con conteo
-    SELECT COALESCE(json_agg(json_build_object(
-        'talla', talla,
-        'cantidad_disponible', cnt
-    ) ORDER BY cnt DESC), '[]'::json)
-    INTO tallas_json
-    FROM (
-        SELECT talla, COUNT(*) AS cnt
-        FROM fact_table
-        WHERE articulo ILIKE '%' || p_articulo || '%'
-          AND disponibilidad = 'available'
-          AND talla IS NOT NULL
-          AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
-          AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
-        GROUP BY talla
-    ) sub;
-
-    RETURN json_build_object(
-        'info_articulo', info_json,
-        'total_disponibles', v_total_disponibles,
-        'total_agotados', v_total_agotados,
-        'tallas_disponibles', (SELECT COUNT(DISTINCT talla) FROM fact_table
+    RETURN (
+        WITH filtered AS (
+            SELECT articulo, marca, categoria, subcategoria, segmento,
+                   precio_final, disponibilidad, talla
+            FROM fact_table
             WHERE articulo ILIKE '%' || p_articulo || '%'
-              AND disponibilidad = 'available' AND talla IS NOT NULL
               AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
-              AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')),
-        'detalle_tallas', tallas_json,
-        '_optimizado', true
+              AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+        ),
+        info AS (
+            SELECT json_build_object(
+                'articulo',     MIN(articulo),
+                'marca',        MIN(marca),
+                'categoria',    MIN(categoria),
+                'subcategoria', MIN(subcategoria),
+                'segmento',     MIN(segmento),
+                'precio_min',   MIN(precio_final),
+                'precio_max',   MAX(precio_final)
+            ) AS val
+            FROM filtered
+        ),
+        conteos AS (
+            SELECT
+                COUNT(*) FILTER (WHERE disponibilidad = 'available')  AS total_disp,
+                COUNT(*) FILTER (WHERE disponibilidad != 'available') AS total_agot
+            FROM filtered
+        ),
+        tallas_det AS (
+            SELECT talla, COUNT(*) AS cnt
+            FROM filtered
+            WHERE disponibilidad = 'available' AND talla IS NOT NULL
+            GROUP BY talla
+        ),
+        tallas_agg AS (
+            SELECT
+                COALESCE(json_agg(json_build_object(
+                    'talla', talla,
+                    'cantidad_disponible', cnt
+                ) ORDER BY cnt DESC), '[]'::json) AS detalle,
+                COUNT(*)::int AS num_tallas
+            FROM tallas_det
+        )
+        SELECT json_build_object(
+            'info_articulo',      i.val,
+            'total_disponibles',  c.total_disp,
+            'total_agotados',     c.total_agot,
+            'tallas_disponibles', t.num_tallas,
+            'detalle_tallas',     t.detalle,
+            '_optimizado',        true
+        )
+        FROM info i, conteos c, tallas_agg t
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
