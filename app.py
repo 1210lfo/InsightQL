@@ -98,6 +98,10 @@ def _check_password() -> bool:
 # ── Enforce authentication gate ──
 _check_password()
 
+# ── Show loading indicator while heavy modules initialize ──
+_loading_placeholder = st.empty()
+_loading_placeholder.info("⚡ Iniciando InsightQL... Cargando módulos del agente.")
+
 # Importar el agente y seguridad (solo después de autenticación)
 from src.agent.graph import run_analytics_query, run_voice_query
 from src.config import get_config
@@ -108,11 +112,13 @@ from src.security import (
     audit_log,
     RateLimitError,
 )
-from src.mcp.supabase_client import get_catalog_summary
+
+# Clear loading indicator
+_loading_placeholder.empty()
 
 
 # =============================================================================
-# ESTADÍSTICAS DINÁMICAS DEL CATÁLOGO (cacheadas por sesión)
+# ESTADÍSTICAS DEL CATÁLOGO (valores conocidos — evita query bloqueante al inicio)
 # =============================================================================
 
 def _safe_async_run(coro):
@@ -132,35 +138,14 @@ def _safe_async_run(coro):
         return asyncio.run(coro)
 
 
-@st.cache_data(ttl=3600, show_spinner=False)
-def _load_catalog_stats() -> dict:
-    """Carga estadísticas del catálogo desde Supabase (cacheado 1 hora)."""
-    try:
-        summary = _safe_async_run(get_catalog_summary())
-        total = summary.get("total_registros", 0)
-        disponibles = summary.get("productos_disponibles", 0)
-        precio_prom = summary.get("precio_promedio", 0)
-        marcas = summary.get("total_marcas", 0)
-        categorias = summary.get("total_categorias", 0)
-        return {
-            "total": f"{total:,}",
-            "disponibles": f"{disponibles:,}",
-            "precio_promedio": f"${precio_prom:,.0f}",
-            "marcas": str(marcas),
-            "categorias": str(categorias),
-        }
-    except Exception:
-        # Fallback si la DB no está disponible al iniciar
-        return {
-            "total": "—",
-            "disponibles": "—",
-            "precio_promedio": "—",
-            "marcas": "—",
-            "categorias": "—",
-        }
-
-
-CATALOG_STATS = _load_catalog_stats()
+# Static catalog stats — avoids blocking DB call on every page load
+CATALOG_STATS = {
+    "total": "337,714",
+    "disponibles": "179,781",
+    "precio_promedio": "$199,597",
+    "marcas": "29",
+    "categorias": "4",
+}
 
 # =============================================================================
 # ESTILOS CSS - Diseño Profesional Corregido
