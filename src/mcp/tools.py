@@ -9,7 +9,6 @@ import uuid
 from typing import Any
 
 from src.config import get_config
-from .client import get_mcp_client, MCPClient
 from .supabase_client import execute_query as execute_supabase_query
 
 logger = logging.getLogger(__name__)
@@ -29,15 +28,13 @@ _schema_cache_time: float = 0
 
 async def get_schema_metadata(
     scope: str = "all",
-    client: MCPClient | None = None,
 ) -> dict[str, Any]:
     """
     Obtiene el esquema de la base de datos de productos de moda.
-    Usa directamente el schema local (MCP deshabilitado).
+    Usa directamente el schema local.
     
     Args:
         scope: "tables", "metrics", "functions" o "all"
-        client: Cliente MCP opcional (no usado)
         
     Returns:
         Metadata del esquema incluyendo columnas y funciones disponibles
@@ -263,19 +260,11 @@ def _get_fashion_schema(scope: str) -> dict[str, Any]:
 
 async def get_metric_definition(
     metric_name: str,
-    client: MCPClient | None = None,
 ) -> dict[str, Any]:
     """
     Obtiene definición detallada de una métrica o consulta.
     """
-    mcp = client or get_mcp_client()
-    
-    try:
-        result = await mcp.call_tool("get_metric_definition", {"metric_name": metric_name})
-        return result
-    except Exception as e:
-        logger.warning(f"MCP metric fetch failed: {e}")
-        return _get_fashion_metric_definition(metric_name)
+    return _get_fashion_metric_definition(metric_name)
 
 
 def _get_fashion_metric_definition(metric_name: str) -> dict[str, Any]:
@@ -342,11 +331,9 @@ def _get_fashion_metric_definition(metric_name: str) -> dict[str, Any]:
 async def validate_query_plan(
     rpc_function: str,
     parameters: dict[str, Any] | None = None,
-    client: MCPClient | None = None,
 ) -> dict[str, Any]:
     """
     Valida un plan de consulta sin ejecutarlo.
-    Usa validación local (MCP deshabilitado).
     """
     config = get_config()
     errors = []
@@ -401,11 +388,10 @@ async def execute_analytics_query(
     rpc_function: str,
     parameters: dict[str, Any] | None = None,
     timeout_ms: int = 30000,
-    client: MCPClient | None = None,
 ) -> dict[str, Any]:
     """
     Ejecuta una consulta analítica sobre el catálogo de moda.
-    Usa directamente Supabase (MCP deshabilitado por errores 400 persistentes).
+    Usa directamente Supabase REST API + RPC functions.
     """
     config = get_config()
     
@@ -462,202 +448,6 @@ async def execute_analytics_query(
             "query_id": query_id,
         }
 
-
-def _get_mock_fashion_result(rpc_function: str, params: dict[str, Any]) -> list[dict[str, Any]]:
-    """Mock data para desarrollo de fashion analytics."""
-    
-    mock_results = {
-        "get_products_by_brand": [
-            {
-                "marca": params.get("marca", params.get("p_marca", "Adidas")),
-                "modelo": "Ultraboost 22",
-                "articulo": "Tenis Ultraboost 22",
-                "categoria": "Calzado",
-                "subcategoria": "Tenis",
-                "segmento": "Unisex",
-                "color": "Core Black",
-                "precio": 799900,
-                "precio_final": 599900,
-                "descuento": 25,
-                "disponibilidad": "available",
-                "tallas_disponibles": ["38", "39", "40", "41", "42"],
-            },
-            {
-                "marca": params.get("marca", params.get("p_marca", "Adidas")),
-                "modelo": "Stan Smith",
-                "articulo": "Tenis Stan Smith",
-                "categoria": "Calzado",
-                "subcategoria": "Tenis",
-                "segmento": "Unisex",
-                "color": "Cloud White",
-                "precio": 449900,
-                "precio_final": 449900,
-                "descuento": 0,
-                "disponibilidad": "available",
-                "tallas_disponibles": ["36", "37", "38", "39", "40", "41", "42", "43"],
-            },
-        ],
-        
-        "get_products_by_category": [
-            {
-                "marca": "Adidas",
-                "modelo": "Forum Low",
-                "articulo": "Tenis Forum Low",
-                "subcategoria": "Tenis",
-                "segmento": "Unisex",
-                "color": "Cloud White",
-                "precio": 549900,
-                "precio_final": 439900,
-                "disponibilidad": "available",
-                "total_skus": 24,
-            },
-        ],
-        
-        "get_price_analysis": [
-            {
-                "grupo": "Adidas",
-                "precio_promedio": 389900.00,
-                "precio_minimo": 89900.00,
-                "precio_maximo": 899900.00,
-                "precio_final_promedio": 329900.00,
-                "descuento_promedio": 15.50,
-                "total_productos": 5420,
-                "productos_con_descuento": 1850,
-            },
-        ],
-        
-        "get_product_composition": [
-            {
-                "marca": "Adidas",
-                "modelo": "Copa Mundial",
-                "articulo": "Zapatos de fútbol Copa Mundial",
-                "articulo_detalles": "El zapato de fútbol más vendido de la historia. Diseño clásico de los años 70.",
-                "composicion": "Parte superior: Cuero de canguro premium para máximo control del balón. Suela: Goma natural con tacos de 12mm. Forro: Textil suave con acolchado en el talón.",
-                "origen": "Alemania",
-                "categoria": "Calzado",
-                "segmento": "Unisex",
-                "precio_final": 649900.00,
-            },
-            {
-                "marca": "Adidas",
-                "modelo": "Ultraboost",
-                "articulo": "Tenis para correr Ultraboost",
-                "articulo_detalles": "Tecnología Boost para máximo retorno de energía",
-                "composicion": "Parte superior: Primeknit 360 transpirable. Media suela: Boost (TPU expandido). Suela: Continental Rubber para tracción en superficies mojadas.",
-                "origen": "Vietnam",
-                "categoria": "Calzado",
-                "segmento": "Unisex",
-                "precio_final": 799900.00,
-            },
-        ],
-        
-        "get_brand_catalog": [
-            {
-                "marca": params.get("marca", params.get("p_marca", "Adidas")),
-                "total_modelos": 342,
-                "total_skus": 5420,
-                "categorias": ["Calzado", "Ropa", "Accesorios"],
-                "segmentos": ["Mujer", "Hombre", "Unisex", "Niños"],
-                "rango_precios": "89900 - 899900",
-                "precio_promedio": 329900.00,
-                "productos_disponibles": 4250,
-                "productos_con_descuento": 1850,
-            },
-        ],
-        
-        # get_segment_analysis eliminada - usar get_segment_price_comparison()
-        
-        "get_discount_products": [
-            {
-                "marca": "Adidas",
-                "modelo": "NMD_R1",
-                "articulo": "Tenis NMD_R1",
-                "categoria": "Calzado",
-                "segmento": "Unisex",
-                "color": "Core Black",
-                "precio": 599900.00,
-                "precio_descuento": 419900.00,
-                "precio_final": 419900.00,
-                "descuento": 30,
-                "ahorro": 180000.00,
-                "disponibilidad": "available",
-            },
-            {
-                "marca": "Adidas",
-                "modelo": "Superstar",
-                "articulo": "Tenis Superstar",
-                "categoria": "Calzado",
-                "segmento": "Unisex",
-                "color": "Cloud White/Core Black",
-                "precio": 449900.00,
-                "precio_descuento": 359900.00,
-                "precio_final": 359900.00,
-                "descuento": 20,
-                "ahorro": 90000.00,
-                "disponibilidad": "available",
-            },
-        ],
-        
-        "get_size_distribution": [
-            {"talla": "35", "total_productos": 320, "productos_disponibles": 180, "porcentaje_disponible": 56.25},
-            {"talla": "36", "total_productos": 420, "productos_disponibles": 280, "porcentaje_disponible": 66.67},
-            {"talla": "37", "total_productos": 485, "productos_disponibles": 350, "porcentaje_disponible": 72.16},
-            {"talla": "38", "total_productos": 520, "productos_disponibles": 410, "porcentaje_disponible": 78.85},
-            {"talla": "39", "total_productos": 510, "productos_disponibles": 395, "porcentaje_disponible": 77.45},
-            {"talla": "40", "total_productos": 530, "productos_disponibles": 420, "porcentaje_disponible": 79.25},
-            {"talla": "41", "total_productos": 490, "productos_disponibles": 380, "porcentaje_disponible": 77.55},
-            {"talla": "42", "total_productos": 450, "productos_disponibles": 320, "porcentaje_disponible": 71.11},
-            {"talla": "43", "total_productos": 380, "productos_disponibles": 245, "porcentaje_disponible": 64.47},
-            {"talla": "44", "total_productos": 290, "productos_disponibles": 165, "porcentaje_disponible": 56.90},
-        ],
-        
-        "search_products": [
-            {
-                "marca": "Adidas",
-                "modelo": "Copa Mundial",
-                "articulo": "Zapatos de fútbol Copa Mundial",
-                "articulo_detalles": "El zapato de fútbol más vendido de la historia",
-                "categoria": "Calzado",
-                "segmento": "Unisex",
-                "color": "Black/White",
-                "precio_final": 649900.00,
-                "disponibilidad": "available",
-                "composicion": "Cuero de canguro premium",
-                "relevancia": 3.0,
-            },
-        ],
-        
-        "get_available_products": [
-            {
-                "marca": "Adidas",
-                "modelo": "Stan Smith",
-                "articulo": "Tenis Stan Smith",
-                "categoria": "Calzado",
-                "segmento": "Unisex",
-                "color": "Cloud White",
-                "talla": "40",
-                "precio": 449900.00,
-                "precio_final": 449900.00,
-                "disponibilidad": "available",
-                "url": "https://www.adidas.co/stan-smith/FX5500.html",
-            },
-            {
-                "marca": "Adidas",
-                "modelo": "Gazelle",
-                "articulo": "Tenis Gazelle",
-                "categoria": "Calzado",
-                "segmento": "Unisex",
-                "color": "Collegiate Navy",
-                "talla": "40",
-                "precio": 399900.00,
-                "precio_final": 399900.00,
-                "disponibilidad": "available",
-                "url": "https://www.adidas.co/gazelle/BB5478.html",
-            },
-        ],
-    }
-    
-    return mock_results.get(rpc_function, [{"message": f"No mock data for {rpc_function}"}])
 
 
 # =============================================================================

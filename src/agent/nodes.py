@@ -808,7 +808,7 @@ async def synthesize_node(state: AnalyticsAgentState) -> AnalyticsAgentState:
     # Handle greeting intent
     if state.get("intent") == "greeting":
         state["final_answer"] = (
-            "¡Hola! 👋 Soy **InsightQL**, tu asistente analítico para el catálogo de moda de Adidas.\n\n"
+            "¡Hola! 👋 Soy **InsightQL**, tu asistente analítico para el catálogo de moda multi-marca.\n\n"
             "Puedo ayudarte con:\n"
             "• 📊 **Resumen del catálogo** - Productos, categorías, segmentos\n"
             "• 💰 **Análisis de precios** - Promedios, descuentos, rangos\n"
@@ -827,7 +827,7 @@ async def synthesize_node(state: AnalyticsAgentState) -> AnalyticsAgentState:
             "• Precios y descuentos\n"
             "• Disponibilidad de tallas\n"
             "• Composición y materiales\n"
-            "• Análisis del catálogo Adidas"
+            "• Análisis del catálogo multi-marca"
         )
         return state
     

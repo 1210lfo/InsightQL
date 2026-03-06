@@ -94,7 +94,7 @@ La base de datos contiene productos de moda con la siguiente estructura:
 - Python 3.11+ (recomendado 3.13)
 - [uv](https://docs.astral.sh/uv/) - Gestor de paquetes Python
 - Cuenta de Supabase con el catálogo de moda
-- API Key de Google Gemini
+- Token de GitHub Models (GPT-4o)
 
 ### 2. Instalación con uv
 
@@ -116,13 +116,21 @@ uv sync --dev
 
 ### 3. Configuración
 
-El archivo `.env` ya está configurado con:
+Copia `.env.example` a `.env` y configura tus credenciales:
+
+```bash
+cp .env.example .env
+```
+
+Variables principales a configurar:
 
 ```env
-GEMINI_API_KEY=AIzaSyDj3QRnBWoAnaU1BW8Rv8Aze8cgZHY99DQ
-MCP_ENDPOINT=https://mcp.supabase.com/mcp?project_ref=lxbbkdnogzosaiqdilou
-SUPABASE_PROJECT_REF=lxbbkdnogzosaiqdilou
+GITHUB_TOKEN=tu_github_token
+SUPABASE_URL=tu_supabase_url
+SUPABASE_SERVICE_ROLE_KEY=tu_service_role_key
 ```
+
+> ⚠️ **Nunca subas tu archivo `.env` al repositorio.** El `.gitignore` ya lo excluye.
 
 ### 4. Configurar Base de Datos (Opcional)
 

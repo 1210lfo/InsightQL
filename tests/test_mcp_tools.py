@@ -158,23 +158,19 @@ class TestExecuteAnalyticsQuery:
             assert "no permitida" in result["error"]
     
     @pytest.mark.asyncio
-    async def test_returns_mock_data_on_mcp_failure(self):
-        """Test that mock data is returned when MCP fails"""
+    async def test_returns_error_for_unknown_function(self):
+        """Test that an error is returned for unknown Supabase function"""
         with patch('src.mcp.tools.get_config') as mock_config:
             mock_config.return_value.agent.allowed_rpc_functions = ["get_revenue_by_segment"]
             
-            with patch('src.mcp.tools.get_mcp_client') as mock_client:
-                mock_instance = MagicMock()
-                mock_instance.call_tool = AsyncMock(side_effect=Exception("MCP unavailable"))
-                mock_client.return_value = mock_instance
+            with patch('src.mcp.tools.execute_supabase_query', new_callable=AsyncMock) as mock_sq:
+                mock_sq.side_effect = Exception("Function not found")
                 
                 result = await execute_analytics_query(
                     rpc_function="get_revenue_by_segment",
                     parameters={"start_date": "2025-01-01", "end_date": "2025-12-31"},
                 )
                 
-                # Function is not implemented, should return error or empty data
-                # (MCP is disabled, uses Supabase direct which doesn't have this function)
                 assert "data" in result
     
     @pytest.mark.asyncio

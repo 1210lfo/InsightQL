@@ -11,7 +11,6 @@ from typing import Optional
 from src.agent import create_analytics_agent, create_initial_state
 from src.config import get_config
 from src.observability import setup_tracing, TracingContext
-from src.mcp.client import cleanup_mcp_client
 
 # Configure logging
 logging.basicConfig(
@@ -138,7 +137,7 @@ async def interactive_mode():
                 print(f"\n❌ Error: {e}")
                 
     finally:
-        await cleanup_mcp_client()
+        pass  # Cleanup (reserved for future use)
 
 
 async def main():
@@ -224,7 +223,6 @@ Ejemplos:
             for rec in result["recommendations"]:
                 print(f"  • {rec}")
         
-        await cleanup_mcp_client()
     else:
         parser.print_help()
         print("\n💡 Tip: Usa --interactive para modo interactivo o --query para una pregunta.")

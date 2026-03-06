@@ -17,7 +17,80 @@ st.set_page_config(
     initial_sidebar_state="expanded",
 )
 
-# Importar el agente y seguridad
+# Logo de Blacksmith Research
+BLACKSMITH_LOGO = "https://blacksmithresearch.com/wp-content/uploads/2025/03/IsoColor.svg"
+
+# =============================================================================
+# AUTENTICACIÓN — Gate de contraseña para demo privada
+# =============================================================================
+
+
+def _get_demo_password() -> str:
+    """Retrieve the demo password from Streamlit secrets or env var."""
+    # 1. Streamlit secrets (Streamlit Cloud)
+    try:
+        return st.secrets["password"]
+    except (FileNotFoundError, KeyError):
+        pass
+    # 2. Environment variable (local dev)
+    import os
+    return os.getenv("DEMO_PASSWORD", "")
+
+
+def _check_password() -> bool:
+    """Show a login gate and return True only when user is authenticated."""
+    demo_password = _get_demo_password()
+    # If no password is configured, skip authentication
+    if not demo_password:
+        return True
+
+    if st.session_state.get("authenticated"):
+        return True
+
+    # ── Login screen ──
+    st.markdown(f"""
+    <div style="display:flex; flex-direction:column; align-items:center; justify-content:center;
+                min-height:70vh; text-align:center;">
+        <img src="{BLACKSMITH_LOGO}" alt="Blacksmith Research" style="height:64px; margin-bottom:1.5rem;">
+        <h1 style="font-size:2.25rem; font-weight:800; color:#1a237e; margin:0;">
+            🔍 InsightQL
+        </h1>
+        <p style="color:#6b7280; font-size:1rem; margin:0.5rem 0 0.25rem;">
+            Agente Analítico Inteligente para Catálogo de Moda
+        </p>
+        <span style="background:#fff3ef; color:#ff6b35; padding:0.25rem 0.75rem;
+                     border-radius:20px; font-size:0.75rem; font-weight:600;">
+            Demo Privada — Blacksmith Research
+        </span>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col1, col2, col3 = st.columns([1, 1.5, 1])
+    with col2:
+        with st.form("login_form"):
+            pwd = st.text_input("Contraseña de acceso", type="password", placeholder="Ingresa la contraseña")
+            submitted = st.form_submit_button("🔓 Acceder", use_container_width=True)
+            if submitted:
+                if pwd == demo_password:
+                    st.session_state["authenticated"] = True
+                    st.rerun()
+                else:
+                    st.error("Contraseña incorrecta. Contacta al equipo de Blacksmith Research.")
+        st.markdown(
+            '<p style="text-align:center; color:#9ca3af; font-size:0.75rem; margin-top:1rem;">'
+            'Acceso restringido • Si necesitas acceso, contacta a '
+            '<a href="https://blacksmithresearch.com" target="_blank" '
+            'style="color:#ff6b35; text-decoration:none; font-weight:600;">'
+            'Blacksmith Research</a></p>',
+            unsafe_allow_html=True,
+        )
+    st.stop()
+
+
+# ── Enforce authentication gate ──
+_check_password()
+
+# Importar el agente y seguridad (solo después de autenticación)
 from src.agent.graph import run_analytics_query, run_voice_query
 from src.config import get_config
 from src.security import (
@@ -27,9 +100,43 @@ from src.security import (
     audit_log,
     RateLimitError,
 )
+from src.mcp.supabase_client import get_catalog_summary
 
-# Logo de Blacksmith Research
-BLACKSMITH_LOGO = "https://blacksmithresearch.com/wp-content/uploads/2025/03/IsoColor.svg"
+
+# =============================================================================
+# ESTADÍSTICAS DINÁMICAS DEL CATÁLOGO (cacheadas por sesión)
+# =============================================================================
+
+@st.cache_data(ttl=3600, show_spinner=False)
+def _load_catalog_stats() -> dict:
+    """Carga estadísticas del catálogo desde Supabase (cacheado 1 hora)."""
+    try:
+        import asyncio
+        summary = asyncio.run(get_catalog_summary())
+        total = summary.get("total_registros", 0)
+        disponibles = summary.get("productos_disponibles", 0)
+        precio_prom = summary.get("precio_promedio", 0)
+        marcas = summary.get("total_marcas", 0)
+        categorias = summary.get("total_categorias", 0)
+        return {
+            "total": f"{total:,}",
+            "disponibles": f"{disponibles:,}",
+            "precio_promedio": f"${precio_prom:,.0f}",
+            "marcas": str(marcas),
+            "categorias": str(categorias),
+        }
+    except Exception:
+        # Fallback si la DB no está disponible al iniciar
+        return {
+            "total": "—",
+            "disponibles": "—",
+            "precio_promedio": "—",
+            "marcas": "—",
+            "categorias": "—",
+        }
+
+
+CATALOG_STATS = _load_catalog_stats()
 
 # =============================================================================
 # ESTILOS CSS - Diseño Profesional Corregido
@@ -562,23 +669,23 @@ with st.sidebar:
     """, unsafe_allow_html=True)
     
     st.markdown('<div class="sidebar-title">📊 Catálogo Conectado</div>', unsafe_allow_html=True)
-    st.markdown("""
+    st.markdown(f"""
     <div class="catalog-stats">
         <div class="stat-row">
             <span class="stat-label">Marcas</span>
-            <span class="stat-value">29</span>
+            <span class="stat-value">{CATALOG_STATS['marcas']}</span>
         </div>
         <div class="stat-row">
             <span class="stat-label">Productos</span>
-            <span class="stat-value">337,714</span>
+            <span class="stat-value">{CATALOG_STATS['total']}</span>
         </div>
         <div class="stat-row">
             <span class="stat-label">Categorías</span>
-            <span class="stat-value">4</span>
+            <span class="stat-value">{CATALOG_STATS['categorias']}</span>
         </div>
         <div class="stat-row">
             <span class="stat-label">Disponibles</span>
-            <span class="stat-value">179,781</span>
+            <span class="stat-value">{CATALOG_STATS['disponibles']}</span>
         </div>
     </div>
     """, unsafe_allow_html=True)
@@ -614,6 +721,14 @@ with st.sidebar:
     </div>
     """, unsafe_allow_html=True)
 
+    # Logout button
+    if _get_demo_password():
+        st.markdown("<br>", unsafe_allow_html=True)
+        if st.button("🔒 Cerrar sesión", key="logout", use_container_width=True):
+            st.session_state["authenticated"] = False
+            st.session_state.messages = []
+            st.rerun()
+
 
 # =============================================================================
 # CONTENIDO PRINCIPAL
@@ -635,26 +750,26 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # Métricas
-st.markdown("""
+st.markdown(f"""
 <div class="metrics-grid">
     <div class="metric-card">
         <div class="metric-icon">📦</div>
-        <div class="metric-value">337,714</div>
+        <div class="metric-value">{CATALOG_STATS['total']}</div>
         <div class="metric-label">Productos</div>
     </div>
     <div class="metric-card orange">
         <div class="metric-icon">🏷️</div>
-        <div class="metric-value">29</div>
+        <div class="metric-value">{CATALOG_STATS['marcas']}</div>
         <div class="metric-label">Marcas</div>
     </div>
     <div class="metric-card green">
         <div class="metric-icon">✓</div>
-        <div class="metric-value">179,781</div>
+        <div class="metric-value">{CATALOG_STATS['disponibles']}</div>
         <div class="metric-label">Disponibles</div>
     </div>
     <div class="metric-card purple">
         <div class="metric-icon">💰</div>
-        <div class="metric-value">$199,597</div>
+        <div class="metric-value">{CATALOG_STATS['precio_promedio']}</div>
         <div class="metric-label">Precio Prom.</div>
     </div>
 </div>
@@ -768,7 +883,7 @@ full_chat = (
     + '<div class="wa-topbar">'
     + '<div class="wa-topbar-avatar">&#129302;</div>'
     + '<div class="wa-topbar-info"><h3>InsightQL</h3>'
-    + '<span>en l\u00ednea \u00b7 Cat\u00e1logo de Moda \u00b7 337,714 productos</span></div></div>'
+    + f'<span>en l\u00ednea \u00b7 Cat\u00e1logo de Moda \u00b7 {CATALOG_STATS["total"]} productos</span></div></div>'
     + '<div class="wa-messages">'
     + '<div class="wa-day-divider"><span>Hoy</span></div>'
     + bubbles_html

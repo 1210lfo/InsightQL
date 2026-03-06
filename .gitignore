@@ -36,7 +36,7 @@ venv/
 ENV/
 env.bak/
 venv.bak/
-.python-version
+# .python-version is tracked (needed by Streamlit Cloud)
 
 # =============================================================================
 # IDE / Editor

@@ -1,0 +1,28 @@
+# =============================================================================
+# InsightQL - Requirements for Streamlit Cloud
+# Generated from pyproject.toml — pin versions for reproducible deploys
+# =============================================================================
+
+# LangGraph & LangChain
+langgraph>=1.0.0
+langchain-core>=0.3.0
+langchain-openai>=0.2.0
+
+# Supabase
+supabase>=2.0.0
+
+# Utilities
+pydantic>=2.0.0
+python-dotenv>=1.0.0
+httpx>=0.27.0
+tenacity>=8.0.0
+
+# Observability - LangSmith
+langsmith>=0.1.0
+jsonpointer>=3.0.0
+
+# Streamlit (provided by Streamlit Cloud, but pin for consistency)
+streamlit>=1.53.1
+
+# Voice / Speech-to-Text
+groq>=0.9.0
