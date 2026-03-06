@@ -323,6 +323,9 @@ async def get_price_analysis(
     segmento: str | None = None,
     subcategoria: str | None = None,
     color: str | None = None,
+    talla: str | None = None,
+    disponibilidad: str | None = None,
+    articulo: str | None = None,
 ) -> dict[str, Any]:
     """
     Análisis de precios OPTIMIZADO con RPC.
@@ -335,11 +338,15 @@ async def get_price_analysis(
         "p_marca": marca,
         "p_subcategoria": subcategoria,
         "p_color": color,
+        "p_talla": talla,
+        "p_disponibilidad": disponibilidad,
+        "p_articulo": articulo,
     })
     
     if rpc_result:
         return {
             "total_registros": rpc_result.get("total_productos", 0),
+            "articulos_unicos": rpc_result.get("articulos_unicos", 0),
             "registros_con_precio": rpc_result.get("total_productos", 0),
             "registros_con_precio_final": rpc_result.get("total_productos", 0),
             "registros_con_descuento": rpc_result.get("productos_con_descuento", 0),
@@ -487,6 +494,9 @@ async def search_products(
     segmento: str | None = None,
     disponibilidad: str | None = None,
     limit: int = 10,
+    subcategoria: str | None = None,
+    color: str | None = None,
+    talla: str | None = None,
 ) -> dict[str, Any]:
     """Búsqueda de productos por texto - OPTIMIZADO con RPC."""
     rpc_result = _call_rpc("rpc_search_text", {
@@ -496,6 +506,9 @@ async def search_products(
         "p_segmento": segmento,
         "p_disponibilidad": disponibilidad,
         "p_limit": limit,
+        "p_subcategoria": subcategoria,
+        "p_color": color,
+        "p_talla": talla,
     })
     
     if rpc_result:
@@ -535,6 +548,9 @@ async def get_discount_products(
     subcategoria: str | None = None,
     color: str | None = None,
     limit: int = 10,
+    talla: str | None = None,
+    disponibilidad: str | None = None,
+    articulo: str | None = None,
 ) -> dict[str, Any]:
     """Productos con descuento - OPTIMIZADO con RPC."""
     rpc_result = _call_rpc("rpc_discount_products", {
@@ -544,6 +560,9 @@ async def get_discount_products(
         "p_subcategoria": subcategoria,
         "p_color": color,
         "p_limit": limit,
+        "p_talla": talla,
+        "p_disponibilidad": disponibilidad,
+        "p_articulo": articulo,
     })
     
     if rpc_result:
@@ -566,6 +585,8 @@ async def get_size_distribution(
     segmento: str | None = None,
     subcategoria: str | None = None,
     color: str | None = None,
+    disponibilidad: str | None = None,
+    articulo: str | None = None,
 ) -> dict[str, Any]:
     """Distribución de tallas - OPTIMIZADO con RPC."""
     rpc_result = _call_rpc("rpc_size_distribution", {
@@ -574,6 +595,8 @@ async def get_size_distribution(
         "p_marca": marca,
         "p_subcategoria": subcategoria,
         "p_color": color,
+        "p_disponibilidad": disponibilidad,
+        "p_articulo": articulo,
     })
     
     if rpc_result:
@@ -717,6 +740,9 @@ async def get_discount_analysis(
     marca: str | None = None,
     subcategoria: str | None = None,
     color: str | None = None,
+    talla: str | None = None,
+    disponibilidad: str | None = None,
+    articulo: str | None = None,
 ) -> dict[str, Any]:
     """
     Análisis completo de descuentos del catálogo - OPTIMIZADO con RPC.
@@ -733,6 +759,9 @@ async def get_discount_analysis(
         "p_marca": marca,
         "p_subcategoria": subcategoria,
         "p_color": color,
+        "p_talla": talla,
+        "p_disponibilidad": disponibilidad,
+        "p_articulo": articulo,
     })
     
     if rpc_result:
@@ -820,6 +849,8 @@ async def get_availability_analysis(
     segmento: str | None = None,
     marca: str | None = None,
     color: str | None = None,
+    subcategoria: str | None = None,
+    talla: str | None = None,
 ) -> dict[str, Any]:
     """
     Análisis de disponibilidad del catálogo - OPTIMIZADO con RPC.
@@ -827,6 +858,7 @@ async def get_availability_analysis(
     Responde preguntas como:
     - ¿Qué porcentaje está disponible vs agotado?
     - ¿Qué categoría tiene más agotados?
+    - ¿Qué disponibilidad hay de tenis talla 42?
     """
     # Intentar RPC primero (1 query vs 300+)
     rpc_result = _call_rpc("rpc_availability_analysis", {
@@ -834,6 +866,8 @@ async def get_availability_analysis(
         "p_segmento": segmento,
         "p_marca": marca,
         "p_color": color,
+        "p_subcategoria": subcategoria,
+        "p_talla": talla,
     })
     
     if rpc_result:
@@ -927,6 +961,7 @@ async def get_segment_price_comparison(
     marca: str | None = None,
     categoria: str | None = None,
     color: str | None = None,
+    subcategoria: str | None = None,
 ) -> dict[str, Any]:
     """
     Compara precios entre segmentos (Hombre vs Mujer vs Unisex) - OPTIMIZADO con RPC.
@@ -936,6 +971,7 @@ async def get_segment_price_comparison(
         "p_categoria": categoria,
         "p_marca": marca,
         "p_color": color,
+        "p_subcategoria": subcategoria,
     })
     
     if rpc_result:
@@ -988,6 +1024,7 @@ async def get_subcategory_distribution(
     segmento: str | None = None,
     marca: str | None = None,
     color: str | None = None,
+    disponibilidad: str | None = None,
 ) -> dict[str, Any]:
     """
     Distribución de productos por subcategoría - OPTIMIZADO con RPC.
@@ -997,6 +1034,7 @@ async def get_subcategory_distribution(
         "p_segmento": segmento,
         "p_marca": marca,
         "p_color": color,
+        "p_disponibilidad": disponibilidad,
     })
     
     if rpc_result:
@@ -1018,6 +1056,8 @@ async def get_model_variety_analysis(
     segmento: str | None = None,
     marca: str | None = None,
     color: str | None = None,
+    subcategoria: str | None = None,
+    disponibilidad: str | None = None,
 ) -> dict[str, Any]:
     """
     Análisis de variedad de modelos y colores - OPTIMIZADO con RPC.
@@ -1027,6 +1067,8 @@ async def get_model_variety_analysis(
         "p_segmento": segmento,
         "p_marca": marca,
         "p_color": color,
+        "p_subcategoria": subcategoria,
+        "p_disponibilidad": disponibilidad,
     })
     
     if rpc_result:
@@ -1053,6 +1095,9 @@ async def get_best_deals(
     disponibilidad: str | None = None,
     color: str | None = None,
     limit: int = 10,
+    subcategoria: str | None = None,
+    talla: str | None = None,
+    articulo: str | None = None,
 ) -> dict[str, Any]:
     """
     Obtiene los productos con mejor relación descuento/precio.
@@ -1060,6 +1105,9 @@ async def get_best_deals(
     
     Args:
         disponibilidad: "available" para solo disponibles, None para todos
+        subcategoria: Filtrar por subcategoría (Tenis, Chaquetas, etc.)
+        talla: Filtrar por talla
+        articulo: Buscar por nombre de artículo
     """
     # Intentar RPC primero (1 query vs 300+)
     rpc_result = _call_rpc("rpc_best_deals", {
@@ -1069,6 +1117,9 @@ async def get_best_deals(
         "p_disponibilidad": disponibilidad,
         "p_color": color,
         "p_limit": limit,
+        "p_subcategoria": subcategoria,
+        "p_talla": talla,
+        "p_articulo": articulo,
     })
     
     if rpc_result:
@@ -1127,6 +1178,8 @@ async def get_best_deals(
 
 async def get_article_available_sizes(
     articulo: str,
+    marca: str | None = None,
+    color: str | None = None,
 ) -> dict[str, Any]:
     """
     Tallas disponibles de un artículo específico - OPTIMIZADO con RPC.
@@ -1137,9 +1190,12 @@ async def get_article_available_sizes(
     Responde preguntas como:
     - ¿Qué tallas hay disponibles del Superstar?
     - ¿Cuántas unidades de cada talla quedan del Air Force 1?
+    - ¿Qué tallas del Superstar blanco de Adidas hay?
     """
     rpc_result = _call_rpc("rpc_article_available_sizes", {
         "p_articulo": articulo,
+        "p_marca": marca,
+        "p_color": color,
     })
     
     if rpc_result:
@@ -1154,13 +1210,18 @@ async def get_article_available_sizes(
     
     # Fallback REST limitado
     client = get_supabase_client()
-    result = client.table(TABLE_NAME).select(
+    query = client.table(TABLE_NAME).select(
         "talla"
     ).ilike(
         "articulo", f"%{articulo}%"
     ).eq(
         "disponibilidad", "available"
-    ).execute()
+    )
+    if marca:
+        query = query.ilike("marca", f"%{marca}%")
+    if color:
+        query = query.ilike("color", f"%{color}%")
+    result = query.execute()
     
     conteo: dict[str, int] = {}
     for row in result.data or []:
@@ -1212,6 +1273,7 @@ async def count_products_by_price(
         count = rpc_result.get("total_productos", 0)
         return {
             "total_productos": count,
+            "articulos_unicos": rpc_result.get("articulos_unicos", 0),
             "precio_promedio": rpc_result.get("precio_promedio", 0),
             "precio_minimo": rpc_result.get("precio_minimo", 0),
             "precio_maximo": rpc_result.get("precio_maximo", 0),
@@ -1257,6 +1319,8 @@ async def get_price_distribution(
     segmento: str | None = None,
     marca: str | None = None,
     color: str | None = None,
+    subcategoria: str | None = None,
+    disponibilidad: str | None = None,
 ) -> dict[str, Any]:
     """
     Distribución de productos por rangos de precio - OPTIMIZADO con RPC.
@@ -1267,6 +1331,8 @@ async def get_price_distribution(
         "p_segmento": segmento,
         "p_marca": marca,
         "p_color": color,
+        "p_subcategoria": subcategoria,
+        "p_disponibilidad": disponibilidad,
     })
     
     if rpc_result:
@@ -1325,6 +1391,9 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 subcategoria=parameters.get("subcategoria"),
                 color=parameters.get("color"),
+                talla=parameters.get("talla"),
+                disponibilidad=parameters.get("disponibilidad"),
+                articulo=parameters.get("articulo"),
             )
         
         elif function_name == "get_available_products":
@@ -1344,6 +1413,18 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 disponibilidad=parameters.get("disponibilidad"),
                 limit=parameters.get("limit", 10),
+                subcategoria=parameters.get("subcategoria"),
+                color=parameters.get("color"),
+                talla=parameters.get("talla"),
+            )
+        
+        elif function_name == "get_product_composition":
+            # Reuse search_products targeting composicion/articulo_detalles fields
+            return await search_products(
+                search_term=parameters.get("modelo", parameters.get("marca", "")),
+                marca=parameters.get("marca"),
+                categoria=parameters.get("categoria"),
+                limit=parameters.get("limit", 10),
             )
         
         # get_segment_analysis eliminada - usar get_segment_price_comparison
@@ -1356,6 +1437,9 @@ async def execute_query(
                 subcategoria=parameters.get("subcategoria"),
                 color=parameters.get("color"),
                 limit=parameters.get("limit", 10),
+                talla=parameters.get("talla"),
+                disponibilidad=parameters.get("disponibilidad"),
+                articulo=parameters.get("articulo"),
             )
         
         elif function_name == "get_size_distribution":
@@ -1365,6 +1449,8 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 subcategoria=parameters.get("subcategoria"),
                 color=parameters.get("color"),
+                disponibilidad=parameters.get("disponibilidad"),
+                articulo=parameters.get("articulo"),
             )
         
         elif function_name == "get_brand_catalog":
@@ -1390,6 +1476,8 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
                 color=parameters.get("color"),
+                subcategoria=parameters.get("subcategoria"),
+                disponibilidad=parameters.get("disponibilidad"),
             )
         
         elif function_name == "get_top_priced_products":
@@ -1414,6 +1502,9 @@ async def execute_query(
                 marca=parameters.get("marca"),
                 subcategoria=parameters.get("subcategoria"),
                 color=parameters.get("color"),
+                talla=parameters.get("talla"),
+                disponibilidad=parameters.get("disponibilidad"),
+                articulo=parameters.get("articulo"),
             )
         
         elif function_name == "get_availability_analysis":
@@ -1422,6 +1513,8 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
                 color=parameters.get("color"),
+                subcategoria=parameters.get("subcategoria"),
+                talla=parameters.get("talla"),
             )
         
         elif function_name == "get_segment_price_comparison":
@@ -1429,6 +1522,7 @@ async def execute_query(
                 marca=parameters.get("marca"),
                 categoria=parameters.get("categoria"),
                 color=parameters.get("color"),
+                subcategoria=parameters.get("subcategoria"),
             )
         
         elif function_name == "get_category_price_comparison":
@@ -1444,6 +1538,7 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
                 color=parameters.get("color"),
+                disponibilidad=parameters.get("disponibilidad"),
             )
         
         elif function_name == "get_model_variety_analysis":
@@ -1452,6 +1547,8 @@ async def execute_query(
                 segmento=parameters.get("segmento"),
                 marca=parameters.get("marca"),
                 color=parameters.get("color"),
+                subcategoria=parameters.get("subcategoria"),
+                disponibilidad=parameters.get("disponibilidad"),
             )
         
         # get_price_range_distribution eliminada - usar get_price_distribution
@@ -1464,11 +1561,16 @@ async def execute_query(
                 disponibilidad=parameters.get("disponibilidad"),
                 color=parameters.get("color"),
                 limit=parameters.get("limit", 10),
+                subcategoria=parameters.get("subcategoria"),
+                talla=parameters.get("talla"),
+                articulo=parameters.get("articulo"),
             )
         
         elif function_name == "get_article_available_sizes":
             return await get_article_available_sizes(
                 articulo=parameters.get("articulo", parameters.get("p_articulo", "")),
+                marca=parameters.get("marca"),
+                color=parameters.get("color"),
             )
         
         else:

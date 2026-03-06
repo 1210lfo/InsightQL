@@ -532,36 +532,20 @@ def format_response(response: dict) -> str:
     return response.get("answer", "No se pudo obtener una respuesta.")
 
 
-def markdown_to_html(text: str) -> str:
-    """Convierte markdown a HTML."""
-    # Negritas
-    text = re.sub(r'\*\*(.+?)\*\*', r'<strong>\1</strong>', text)
-    # Cursivas
-    text = re.sub(r'(?<!\*)\*([^*]+)\*(?!\*)', r'<em>\1</em>', text)
-    # Bullets
-    lines = text.split('\n')
-    result = []
-    in_list = False
-    
-    for line in lines:
-        stripped = line.strip()
-        if stripped.startswith('• ') or stripped.startswith('- '):
-            if not in_list:
-                result.append('<ul style="margin: 0.5rem 0; padding-left: 1.5rem; list-style: disc;">')
-                in_list = True
-            content = stripped[2:]
-            result.append(f'<li style="margin: 0.25rem 0;">{content}</li>')
-        else:
-            if in_list:
-                result.append('</ul>')
-                in_list = False
-            if stripped:
-                result.append(f'{stripped}<br>')
-    
-    if in_list:
-        result.append('</ul>')
-    
-    return ''.join(result)
+def _execute_user_query(query: str) -> str:
+    """Validate, rate-limit, audit, and execute a text query. Returns response string."""
+    is_valid, validation_error = validate_user_input(query)
+    if not is_valid:
+        return f"⚠️ {validation_error}"
+
+    limiter = get_rate_limiter()
+    session_id = st.session_state.get("session_id", "anonymous")
+    if not limiter.is_allowed(session_id):
+        return "⏳ Demasiadas consultas. Espera unos segundos."
+
+    audit_log("query", {"query": query[:100]}, session_id)
+    result = run_query(query)
+    return format_response(result)
 
 
 # =============================================================================
@@ -857,18 +841,7 @@ if user_input := st.chat_input("Escribe un mensaje..."):
 
     with st.spinner("🔄 Analizando..."):
         try:
-            is_valid, validation_error = validate_user_input(user_input)
-            if not is_valid:
-                response = f"⚠️ {validation_error}"
-            else:
-                limiter = get_rate_limiter()
-                session_id = st.session_state.get("session_id", "anonymous")
-                if not limiter.is_allowed(session_id):
-                    response = "⏳ Demasiadas consultas. Espera unos segundos."
-                else:
-                    audit_log("query", {"query": user_input[:100]}, session_id)
-                    result = run_query(user_input)
-                    response = format_response(result)
+            response = _execute_user_query(user_input)
         except RateLimitError as e:
             response = f"⏳ {str(e)}"
         except Exception as e:
@@ -886,18 +859,7 @@ if "pending_query" in st.session_state:
 
     with st.spinner("🔄 Analizando..."):
         try:
-            is_valid, validation_error = validate_user_input(pending)
-            if not is_valid:
-                response = f"⚠️ {validation_error}"
-            else:
-                limiter = get_rate_limiter()
-                session_id = st.session_state.get("session_id", "anonymous")
-                if not limiter.is_allowed(session_id):
-                    response = "⏳ Demasiadas consultas. Espera unos segundos."
-                else:
-                    audit_log("query", {"query": pending[:100]}, session_id)
-                    result = run_query(pending)
-                    response = format_response(result)
+            response = _execute_user_query(pending)
         except RateLimitError as e:
             response = f"⏳ {str(e)}"
         except Exception as e:

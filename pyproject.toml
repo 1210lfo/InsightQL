@@ -3,7 +3,7 @@ name = "insightql"
 version = "0.1.0"
 description = "Agente Analítico LLM para Catálogo de Moda - Supabase con MCP + LangGraph"
 readme = "README.md"
-requires-python = ">=3.11"
+requires-python = ">=3.11, <3.14"
 dependencies = [
     # LangGraph & LangChain
     "langgraph>=1.0.0",

@@ -55,9 +55,15 @@ class AnalyticsAgentState(TypedDict, total=False):
     # === Parsing ===
     intent: Literal[
         "kpi_query",
+        "product_query",
+        "price_query",
+        "availability_query",
+        "composition_query",
         "comparison",
+        "catalog_summary",
         "trend",
         "drill_down",
+        "greeting",
         "clarification_needed",
         "unsupported"
     ]

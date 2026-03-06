@@ -1,23 +1,24 @@
 -- ============================================================================
--- InsightQL - ARCHIVO CONSOLIDADO DE TODAS LAS FUNCIONES RPC
+-- InsightQL - TODAS LAS FUNCIONES RPC (versión final consolidada)
 -- ============================================================================
 -- EJECUTAR COMPLETO EN SUPABASE SQL EDITOR
 --
--- Este archivo reemplaza: 03_funciones_rpc.sql, FIX_ejecutar_en_supabase.sql,
--- y 04_rpc_optimizadas_v2.sql
+-- Este archivo contiene las 16 funciones RPC activas del proyecto.
+-- Incluye SET search_path = public en cada función.
+-- Todas usan CREATE OR REPLACE (seguro para re-ejecutar).
 --
--- TOTAL: 15 funciones RPC activas
--- MEJORAS en esta version:
---   - Filtro p_color agregado a TODAS las funciones de analisis (promedios/sumas)
---   - categoria/subcategoria siempre usan match EXACTO (=)
---   - marca/color/talla usan ILIKE para match parcial
+-- TOTAL: 16 funciones RPC
 --
--- Fecha: Febrero 2026
+-- ANTES de ejecutar, limpia overloads antiguos:
+--   DROP FUNCTION IF EXISTS public.rpc_article_available_sizes(TEXT);
+--   (ver sección LIMPIEZA al final)
+--
+-- Última actualización: Marzo 2026
 -- ============================================================================
 
 
 -- ============================================================================
--- 1. rpc_catalog_summary - Resumen general del catalogo
+-- 1. rpc_catalog_summary - Resumen general del catálogo (sin params)
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_catalog_summary()
@@ -38,18 +39,20 @@ BEGIN
             'productos_disponibles', COUNT(*) FILTER (WHERE disponibilidad = 'available'),
             'productos_agotados', COUNT(*) FILTER (WHERE disponibilidad != 'available'),
             'productos_con_descuento', COUNT(*) FILTER (WHERE descuento > 0),
-            'descuento_promedio_pct', ROUND(AVG(CASE WHEN descuento > 0 THEN descuento ELSE 0 END)::numeric * 100, 1),
+            'descuento_promedio_pct', ROUND(AVG(CASE WHEN descuento > 0 THEN descuento ELSE NULL END)::numeric * 100, 1),
             '_optimizado', true
         )
         FROM fact_table
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_catalog_summary() SET search_path = public;
 
 
 -- ============================================================================
--- 2. rpc_price_analysis - Analisis de precios (promedios, sumas, descuentos)
---    MEJORADO: + p_color
+-- 2. rpc_price_analysis - Análisis de precios
+--    Params: p_categoria, p_segmento, p_marca, p_subcategoria, p_color,
+--            p_talla, p_disponibilidad, p_articulo
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_price_analysis(
@@ -57,23 +60,29 @@ CREATE OR REPLACE FUNCTION public.rpc_price_analysis(
     p_segmento TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
     p_subcategoria TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_talla TEXT DEFAULT NULL,
+    p_disponibilidad TEXT DEFAULT NULL,
+    p_articulo TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
     RETURN (
         SELECT json_build_object(
             'total_productos', COUNT(*),
+            'articulos_unicos', COUNT(DISTINCT articulo),
             'precio_original_promedio', ROUND(AVG(precio)::numeric, 0),
             'precio_final_promedio', ROUND(AVG(precio_final)::numeric, 0),
             'precio_minimo', MIN(precio_final),
             'precio_maximo', MAX(precio_final),
-            'descuento_promedio_pct', ROUND(AVG(CASE WHEN descuento > 0 THEN descuento ELSE 0 END)::numeric * 100, 1),
+            'descuento_promedio_pct', ROUND(AVG(CASE WHEN descuento > 0 THEN descuento ELSE NULL END)::numeric * 100, 1),
             'productos_con_descuento', COUNT(*) FILTER (WHERE descuento > 0),
-            'ahorro_total_potencial', ROUND(SUM(precio - precio_final)::numeric, 0),
+            'ahorro_total_potencial', ROUND(SUM(CASE WHEN precio > precio_final THEN precio - precio_final ELSE 0 END)::numeric, 0),
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'subcategoria', p_subcategoria, 'color', p_color
+                'marca', p_marca, 'subcategoria', p_subcategoria,
+                'color', p_color, 'talla', p_talla,
+                'disponibilidad', p_disponibilidad, 'articulo', p_articulo
             ),
             '_optimizado', true
         )
@@ -83,14 +92,19 @@ BEGIN
           AND (p_segmento IS NULL OR segmento = p_segmento)
           AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
           AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+          AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
+          AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+          AND (p_articulo IS NULL OR articulo ILIKE '%' || p_articulo || '%')
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_price_analysis(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 3. rpc_discount_analysis - Analisis de descuentos (promedios, sumas, ahorro)
---    MEJORADO: + p_color
+-- 3. rpc_discount_analysis - Análisis de descuentos
+--    Params: p_categoria, p_segmento, p_marca, p_subcategoria, p_color,
+--            p_talla, p_disponibilidad, p_articulo
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_discount_analysis(
@@ -98,7 +112,10 @@ CREATE OR REPLACE FUNCTION public.rpc_discount_analysis(
     p_segmento TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
     p_subcategoria TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_talla TEXT DEFAULT NULL,
+    p_disponibilidad TEXT DEFAULT NULL,
+    p_articulo TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -110,11 +127,13 @@ BEGIN
             'porcentaje_con_descuento', ROUND(COUNT(*) FILTER (WHERE descuento > 0)::numeric / NULLIF(COUNT(*), 0) * 100, 1),
             'descuento_promedio_pct', ROUND(AVG(CASE WHEN descuento > 0 THEN descuento * 100 ELSE NULL END)::numeric, 1),
             'descuento_maximo_pct', ROUND(MAX(descuento)::numeric * 100, 1),
-            'ahorro_total', ROUND(SUM(precio - precio_final)::numeric, 0),
-            'ahorro_promedio', ROUND(AVG(precio - precio_final)::numeric, 0),
+            'ahorro_total', ROUND(SUM(CASE WHEN precio > precio_final THEN precio - precio_final ELSE 0 END)::numeric, 0),
+            'ahorro_promedio', ROUND(AVG(CASE WHEN precio > precio_final AND precio_final > 0 THEN precio - precio_final ELSE NULL END)::numeric, 0),
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'subcategoria', p_subcategoria, 'color', p_color
+                'marca', p_marca, 'subcategoria', p_subcategoria,
+                'color', p_color, 'talla', p_talla,
+                'disponibilidad', p_disponibilidad, 'articulo', p_articulo
             ),
             '_optimizado', true
         )
@@ -124,21 +143,27 @@ BEGIN
           AND (p_segmento IS NULL OR segmento = p_segmento)
           AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
           AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+          AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
+          AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+          AND (p_articulo IS NULL OR articulo ILIKE '%' || p_articulo || '%')
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_discount_analysis(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 4. rpc_availability_analysis - Analisis de disponibilidad
---    MEJORADO: + p_color
+-- 4. rpc_availability_analysis - Análisis de disponibilidad
+--    Params: p_categoria, p_segmento, p_marca, p_color, p_subcategoria, p_talla
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_availability_analysis(
     p_categoria TEXT DEFAULT NULL,
     p_segmento TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_subcategoria TEXT DEFAULT NULL,
+    p_talla TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -150,6 +175,8 @@ BEGIN
               AND (p_categoria IS NULL OR categoria = p_categoria)
               AND (p_segmento IS NULL OR segmento = p_segmento)
               AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+              AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
+              AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
             GROUP BY categoria, disponibilidad
         ),
         totals AS (
@@ -177,7 +204,8 @@ BEGIN
             'por_categoria', pc.data,
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'color', p_color
+                'marca', p_marca, 'color', p_color,
+                'subcategoria', p_subcategoria, 'talla', p_talla
             ),
             '_optimizado', true
         )
@@ -185,17 +213,19 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_availability_analysis(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 5. rpc_segment_price_comparison - Comparacion de precios por segmento
---    MEJORADO: + p_color
+-- 5. rpc_segment_price_comparison - Comparación de precios por segmento
+--    Params: p_categoria, p_marca, p_color, p_subcategoria
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_segment_price_comparison(
     p_categoria TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_subcategoria TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -209,26 +239,31 @@ BEGIN
                         'precio_promedio', ROUND(AVG(precio)::numeric, 0),
                         'precio_final_promedio', ROUND(AVG(precio_final)::numeric, 0),
                         'precio_minimo', MIN(precio_final), 'precio_maximo', MAX(precio_final),
-                        'descuento_promedio', ROUND(AVG(CASE WHEN descuento > 0 THEN descuento * 100 ELSE 0 END)::numeric, 1)
+                        'descuento_promedio', ROUND(AVG(CASE WHEN descuento > 0 THEN descuento * 100 ELSE NULL END)::numeric, 1)
                     ) as seg_data, ROUND(AVG(precio_final)::numeric, 0) as precio_final_promedio
                     FROM fact_table
                     WHERE (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
                       AND (p_categoria IS NULL OR categoria = p_categoria)
                       AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+                      AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
                     GROUP BY segmento
                 ) sub
             ),
-            'filtros', json_build_object('categoria', p_categoria, 'marca', p_marca, 'color', p_color),
+            'filtros', json_build_object(
+                'categoria', p_categoria, 'marca', p_marca,
+                'color', p_color, 'subcategoria', p_subcategoria
+            ),
             '_optimizado', true
         )
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_segment_price_comparison(TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 6. rpc_category_price_comparison - Comparacion de precios por categoria
---    MEJORADO: + p_color
+-- 6. rpc_category_price_comparison - Comparación de precios por categoría
+--    Params: p_marca, p_segmento, p_color
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_category_price_comparison(
@@ -251,7 +286,7 @@ BEGIN
                         'precio_minimo', MIN(precio_final),
                         'precio_maximo', MAX(precio_final),
                         'descuento_promedio_pct', ROUND(
-                            AVG(CASE WHEN descuento > 0 THEN descuento * 100 ELSE 0 END)::numeric, 1
+                            AVG(CASE WHEN descuento > 0 THEN descuento * 100 ELSE NULL END)::numeric, 1
                         )
                     ) AS cat_data,
                     ROUND(AVG(precio_final)::numeric, 0) AS precio_final_promedio
@@ -268,18 +303,20 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_category_price_comparison(TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 7. rpc_subcategory_distribution - Distribucion por subcategoria
---    MEJORADO: + p_color
+-- 7. rpc_subcategory_distribution - Distribución por subcategoría
+--    Params: p_categoria, p_segmento, p_marca, p_color, p_disponibilidad
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_subcategory_distribution(
     p_categoria TEXT DEFAULT NULL,
     p_segmento TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_disponibilidad TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -290,6 +327,7 @@ BEGIN
               AND (p_categoria IS NULL OR categoria = p_categoria)
               AND (p_segmento IS NULL OR segmento = p_segmento)
               AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+              AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
         ),
         total AS (SELECT COUNT(*) as cnt FROM filtered),
         distribution AS (
@@ -307,7 +345,8 @@ BEGIN
             ),
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'color', p_color
+                'marca', p_marca, 'color', p_color,
+                'disponibilidad', p_disponibilidad
             ),
             '_optimizado', true
         )
@@ -315,18 +354,22 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_subcategory_distribution(TEXT,TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 8. rpc_model_variety - Variedad de modelos, colores, articulos
---    MEJORADO: + p_color
+-- 8. rpc_model_variety - Análisis de variedad de modelos
+--    Params: p_categoria, p_segmento, p_marca, p_color,
+--            p_subcategoria, p_disponibilidad
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_model_variety(
     p_categoria TEXT DEFAULT NULL,
     p_segmento TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_subcategoria TEXT DEFAULT NULL,
+    p_disponibilidad TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -338,6 +381,8 @@ BEGIN
               AND (p_segmento IS NULL OR segmento = p_segmento)
               AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
               AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+              AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
+              AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
         ),
         totals AS (
             SELECT COUNT(*) AS total_registros,
@@ -374,7 +419,8 @@ BEGIN
             ),
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'color', p_color
+                'marca', p_marca, 'color', p_color,
+                'subcategoria', p_subcategoria, 'disponibilidad', p_disponibilidad
             ),
             '_optimizado', true
         )
@@ -382,18 +428,22 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_model_variety(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 9. rpc_price_distribution - Distribucion por rangos de precio
---    MEJORADO: + p_color
+-- 9. rpc_price_distribution - Distribución de precios por rango
+--    Params: p_categoria, p_segmento, p_marca, p_color,
+--            p_subcategoria, p_disponibilidad
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_price_distribution(
     p_categoria TEXT DEFAULT NULL,
     p_segmento TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_subcategoria TEXT DEFAULT NULL,
+    p_disponibilidad TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -406,6 +456,8 @@ BEGIN
               AND (p_segmento IS NULL OR segmento = p_segmento)
               AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
               AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+              AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
+              AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
         ),
         total AS (SELECT COUNT(*) AS cnt FROM filtered),
         rangos AS (
@@ -471,7 +523,8 @@ BEGIN
             ),
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'color', p_color
+                'marca', p_marca, 'color', p_color,
+                'subcategoria', p_subcategoria, 'disponibilidad', p_disponibilidad
             ),
             '_optimizado', true
         )
@@ -479,11 +532,13 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_price_distribution(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 10. rpc_size_distribution - Distribucion de tallas con disponibilidad
---     MEJORADO: + p_color
+-- 10. rpc_size_distribution - Distribución de tallas
+--     Params: p_categoria, p_segmento, p_marca, p_subcategoria, p_color,
+--             p_disponibilidad, p_articulo
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_size_distribution(
@@ -491,7 +546,9 @@ CREATE OR REPLACE FUNCTION public.rpc_size_distribution(
     p_segmento TEXT DEFAULT NULL,
     p_marca TEXT DEFAULT NULL,
     p_subcategoria TEXT DEFAULT NULL,
-    p_color TEXT DEFAULT NULL
+    p_color TEXT DEFAULT NULL,
+    p_disponibilidad TEXT DEFAULT NULL,
+    p_articulo TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -505,6 +562,8 @@ BEGIN
               AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
               AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
               AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+              AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+              AND (p_articulo IS NULL OR articulo ILIKE '%' || p_articulo || '%')
         ),
         total AS (SELECT COUNT(*) AS cnt FROM filtered)
         SELECT json_build_object(
@@ -527,7 +586,9 @@ BEGIN
             ),
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'subcategoria', p_subcategoria, 'color', p_color
+                'marca', p_marca, 'subcategoria', p_subcategoria,
+                'color', p_color, 'disponibilidad', p_disponibilidad,
+                'articulo', p_articulo
             ),
             '_optimizado', true
         )
@@ -535,11 +596,13 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_size_distribution(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 11. rpc_best_deals - Mejores ofertas del catalogo
---     MEJORADO: + p_color
+-- 11. rpc_best_deals - Mejores ofertas (por ahorro absoluto y porcentaje)
+--     Params: p_categoria, p_segmento, p_marca, p_disponibilidad, p_color,
+--             p_limit, p_subcategoria, p_talla, p_articulo
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_best_deals(
@@ -548,7 +611,10 @@ CREATE OR REPLACE FUNCTION public.rpc_best_deals(
     p_marca TEXT DEFAULT NULL,
     p_disponibilidad TEXT DEFAULT NULL,
     p_color TEXT DEFAULT NULL,
-    p_limit INT DEFAULT 10
+    p_limit INT DEFAULT 10,
+    p_subcategoria TEXT DEFAULT NULL,
+    p_talla TEXT DEFAULT NULL,
+    p_articulo TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 BEGIN
@@ -567,6 +633,9 @@ BEGIN
               AND (p_segmento IS NULL OR segmento = p_segmento)
               AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
               AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+              AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
+              AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
+              AND (p_articulo IS NULL OR articulo ILIKE '%' || p_articulo || '%')
         ),
         total AS (SELECT COUNT(*) as cnt FROM deals)
         SELECT json_build_object(
@@ -591,7 +660,9 @@ BEGIN
             ),
             'filtros', json_build_object(
                 'categoria', p_categoria, 'segmento', p_segmento,
-                'marca', p_marca, 'disponibilidad', p_disponibilidad, 'color', p_color
+                'marca', p_marca, 'disponibilidad', p_disponibilidad,
+                'color', p_color, 'subcategoria', p_subcategoria,
+                'talla', p_talla, 'articulo', p_articulo
             ),
             '_optimizado', true
         )
@@ -599,11 +670,13 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_best_deals(TEXT,TEXT,TEXT,TEXT,TEXT,INT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 12. rpc_discount_products - Productos con descuento (muestra limitada)
---     MEJORADO: + p_color
+-- 12. rpc_discount_products - Productos con descuento (listado)
+--     Params: p_categoria, p_segmento, p_marca, p_subcategoria, p_color,
+--             p_limit, p_talla, p_disponibilidad, p_articulo
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_discount_products(
@@ -612,7 +685,10 @@ CREATE OR REPLACE FUNCTION public.rpc_discount_products(
     p_marca TEXT DEFAULT NULL,
     p_subcategoria TEXT DEFAULT NULL,
     p_color TEXT DEFAULT NULL,
-    p_limit INT DEFAULT 10
+    p_limit INT DEFAULT 10,
+    p_talla TEXT DEFAULT NULL,
+    p_disponibilidad TEXT DEFAULT NULL,
+    p_articulo TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 DECLARE
@@ -626,7 +702,10 @@ BEGIN
               AND (p_categoria IS NULL OR categoria = p_categoria)
               AND (p_segmento IS NULL OR segmento = p_segmento)
               AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
-              AND (p_color IS NULL OR color ILIKE '%' || p_color || '%'))
+              AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+              AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
+              AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+              AND (p_articulo IS NULL OR articulo ILIKE '%' || p_articulo || '%'))
     INTO total_con_descuento, total_registros
     FROM fact_table
     WHERE precio > precio_final
@@ -635,13 +714,17 @@ BEGIN
       AND (p_categoria IS NULL OR categoria = p_categoria)
       AND (p_segmento IS NULL OR segmento = p_segmento)
       AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
-      AND (p_color IS NULL OR color ILIKE '%' || p_color || '%');
+      AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+      AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
+      AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+      AND (p_articulo IS NULL OR articulo ILIKE '%' || p_articulo || '%');
 
     SELECT COALESCE(json_agg(row_data), '[]'::json) INTO productos_json
     FROM (
         SELECT json_build_object(
             'articulo', articulo, 'modelo', modelo, 'marca', marca,
             'categoria', categoria, 'segmento', segmento, 'color', color,
+            'talla', talla,
             'precio_original', precio, 'precio_final', precio_final,
             'ahorro', precio - precio_final,
             'descuento_pct', ROUND(((precio - precio_final)::numeric / NULLIF(precio, 0) * 100), 1),
@@ -655,6 +738,9 @@ BEGIN
           AND (p_segmento IS NULL OR segmento = p_segmento)
           AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
           AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+          AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
+          AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+          AND (p_articulo IS NULL OR articulo ILIKE '%' || p_articulo || '%')
         ORDER BY (precio - precio_final) DESC
         LIMIT p_limit
     ) sub;
@@ -668,16 +754,21 @@ BEGIN
         'productos', productos_json,
         'filtros', json_build_object(
             'categoria', p_categoria, 'segmento', p_segmento,
-            'marca', p_marca, 'subcategoria', p_subcategoria, 'color', p_color
+            'marca', p_marca, 'subcategoria', p_subcategoria,
+            'color', p_color, 'talla', p_talla,
+            'disponibilidad', p_disponibilidad, 'articulo', p_articulo
         ),
         '_optimizado', true
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_discount_products(TEXT,TEXT,TEXT,TEXT,TEXT,INT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 13. rpc_count_by_filters - Conteo con filtros multiples + estadisticas
+-- 13. rpc_count_by_filters - Conteo con filtros múltiples + estadísticas
+--     Params: p_categoria, p_segmento, p_marca, p_color, p_subcategoria,
+--             p_talla, p_disponibilidad, p_precio_min, p_precio_max
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_count_by_filters(
@@ -697,12 +788,14 @@ DECLARE
     v_precio_prom NUMERIC;
     v_precio_min NUMERIC;
     v_precio_max NUMERIC;
+    v_articulos BIGINT;
 BEGIN
     SELECT COUNT(*),
            ROUND(AVG(precio_final)::numeric, 0),
            MIN(precio_final),
-           MAX(precio_final)
-    INTO v_count, v_precio_prom, v_precio_min, v_precio_max
+           MAX(precio_final),
+           COUNT(DISTINCT articulo)
+    INTO v_count, v_precio_prom, v_precio_min, v_precio_max, v_articulos
     FROM fact_table
     WHERE (p_categoria IS NULL OR categoria = p_categoria)
       AND (p_segmento IS NULL OR segmento = p_segmento)
@@ -716,6 +809,7 @@ BEGIN
 
     RETURN json_build_object(
         'total_productos', v_count,
+        'articulos_unicos', v_articulos,
         'precio_promedio', v_precio_prom,
         'precio_minimo', v_precio_min,
         'precio_maximo', v_precio_max,
@@ -730,10 +824,13 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_count_by_filters(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,NUMERIC,NUMERIC) SET search_path = public;
 
 
 -- ============================================================================
--- 14. rpc_search_text - Busqueda por texto libre
+-- 14. rpc_search_text - Búsqueda por texto libre
+--     Params: p_search_term, p_marca, p_categoria, p_segmento,
+--             p_disponibilidad, p_limit, p_subcategoria, p_color, p_talla
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_search_text(
@@ -742,7 +839,10 @@ CREATE OR REPLACE FUNCTION public.rpc_search_text(
     p_categoria TEXT DEFAULT NULL,
     p_segmento TEXT DEFAULT NULL,
     p_disponibilidad TEXT DEFAULT NULL,
-    p_limit INT DEFAULT 10
+    p_limit INT DEFAULT 10,
+    p_subcategoria TEXT DEFAULT NULL,
+    p_color TEXT DEFAULT NULL,
+    p_talla TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 DECLARE
@@ -758,16 +858,19 @@ BEGIN
       AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
       AND (p_categoria IS NULL OR categoria = p_categoria)
       AND (p_segmento IS NULL OR segmento = p_segmento)
-      AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad);
+      AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+      AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
+      AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+      AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%');
 
     SELECT COALESCE(json_agg(row_data), '[]'::json) INTO productos_json
     FROM (
         SELECT json_build_object(
             'articulo', articulo, 'modelo', modelo, 'marca', marca,
             'categoria', categoria, 'subcategoria', subcategoria,
-            'segmento', segmento, 'color', color,
+            'segmento', segmento, 'color', color, 'talla', talla,
             'precio_original', precio, 'precio_final', precio_final,
-            'talla', talla, 'disponibilidad', disponibilidad
+            'disponibilidad', disponibilidad
         ) AS row_data
         FROM fact_table
         WHERE (modelo ILIKE v_term OR articulo ILIKE v_term OR articulo_detalles ILIKE v_term)
@@ -775,6 +878,9 @@ BEGIN
           AND (p_categoria IS NULL OR categoria = p_categoria)
           AND (p_segmento IS NULL OR segmento = p_segmento)
           AND (p_disponibilidad IS NULL OR disponibilidad = p_disponibilidad)
+          AND (p_subcategoria IS NULL OR subcategoria = p_subcategoria)
+          AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
+          AND (p_talla IS NULL OR talla ILIKE '%' || p_talla || '%')
         ORDER BY precio_final DESC
         LIMIT p_limit
     ) sub;
@@ -785,16 +891,21 @@ BEGIN
         'productos', productos_json,
         'filtros', json_build_object(
             'marca', p_marca, 'categoria', p_categoria,
-            'segmento', p_segmento, 'disponibilidad', p_disponibilidad
+            'segmento', p_segmento, 'disponibilidad', p_disponibilidad,
+            'subcategoria', p_subcategoria, 'color', p_color, 'talla', p_talla
         ),
         '_optimizado', true
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_search_text(TEXT,TEXT,TEXT,TEXT,TEXT,INT,TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- 15. rpc_search_products_advanced - Busqueda avanzada con todos los filtros
+-- 15. rpc_search_products_advanced - Búsqueda avanzada con todos los filtros
+--     Params: p_subcategoria, p_categoria, p_segmento, p_color, p_marca,
+--             p_talla, p_precio_min, p_precio_max, p_disponibilidad,
+--             p_orden, p_limit
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_search_products_advanced(
@@ -869,16 +980,18 @@ BEGIN
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_search_products_advanced(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,NUMERIC,NUMERIC,TEXT,TEXT,INT) SET search_path = public;
 
 
 -- ============================================================================
--- 16. rpc_article_available_sizes - Tallas disponibles de un articulo especifico
---     Dado un articulo exacto, devuelve las tallas con stock y cuantas
---     unidades (filas) hay de cada talla disponible.
+-- 16. rpc_article_available_sizes - Tallas disponibles de un artículo
+--     Params: p_articulo, p_marca, p_color
 -- ============================================================================
 
 CREATE OR REPLACE FUNCTION public.rpc_article_available_sizes(
-    p_articulo TEXT
+    p_articulo TEXT,
+    p_marca TEXT DEFAULT NULL,
+    p_color TEXT DEFAULT NULL
 )
 RETURNS JSON AS $$
 DECLARE
@@ -887,7 +1000,7 @@ DECLARE
     tallas_json JSON;
     info_json JSON;
 BEGIN
-    -- Info basica del articulo (1 scan)
+    -- Info básica del artículo
     SELECT json_build_object(
         'articulo', MIN(articulo),
         'marca', MIN(marca),
@@ -898,7 +1011,9 @@ BEGIN
         'precio_max', MAX(precio_final)
     ) INTO info_json
     FROM fact_table
-    WHERE articulo ILIKE '%' || p_articulo || '%';
+    WHERE articulo ILIKE '%' || p_articulo || '%'
+      AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
+      AND (p_color IS NULL OR color ILIKE '%' || p_color || '%');
 
     -- Conteos globales
     SELECT
@@ -906,7 +1021,9 @@ BEGIN
         COUNT(*) FILTER (WHERE disponibilidad != 'available')
     INTO v_total_disponibles, v_total_agotados
     FROM fact_table
-    WHERE articulo ILIKE '%' || p_articulo || '%';
+    WHERE articulo ILIKE '%' || p_articulo || '%'
+      AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
+      AND (p_color IS NULL OR color ILIKE '%' || p_color || '%');
 
     -- Tallas disponibles con conteo
     SELECT COALESCE(json_agg(json_build_object(
@@ -920,6 +1037,8 @@ BEGIN
         WHERE articulo ILIKE '%' || p_articulo || '%'
           AND disponibilidad = 'available'
           AND talla IS NOT NULL
+          AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
+          AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')
         GROUP BY talla
     ) sub;
 
@@ -929,31 +1048,78 @@ BEGIN
         'total_agotados', v_total_agotados,
         'tallas_disponibles', (SELECT COUNT(DISTINCT talla) FROM fact_table
             WHERE articulo ILIKE '%' || p_articulo || '%'
-              AND disponibilidad = 'available' AND talla IS NOT NULL),
+              AND disponibilidad = 'available' AND talla IS NOT NULL
+              AND (p_marca IS NULL OR marca ILIKE '%' || p_marca || '%')
+              AND (p_color IS NULL OR color ILIKE '%' || p_color || '%')),
         'detalle_tallas', tallas_json,
         '_optimizado', true
     );
 END;
 $$ LANGUAGE plpgsql STABLE;
+ALTER FUNCTION public.rpc_article_available_sizes(TEXT,TEXT,TEXT) SET search_path = public;
 
 
 -- ============================================================================
--- VERIFICACION - Ejecutar para confirmar
+-- LIMPIEZA: Eliminar overloads antiguos (ejecutar ANTES de este script)
+-- ============================================================================
+-- Si vienes de una versión anterior, ejecuta estos DROP primero para
+-- eliminar versiones viejas con menos parámetros:
+--
+-- DROP FUNCTION IF EXISTS public.rpc_article_available_sizes(TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_price_analysis(TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_price_analysis(TEXT,TEXT,TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_discount_analysis(TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_discount_analysis(TEXT,TEXT,TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_availability_analysis(TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_availability_analysis(TEXT,TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_segment_price_comparison(TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_segment_price_comparison(TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_subcategory_distribution(TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_subcategory_distribution(TEXT,TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_model_variety(TEXT,TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_price_distribution(TEXT,TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_size_distribution(TEXT,TEXT,TEXT,TEXT,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_best_deals(TEXT,TEXT,TEXT,INT);
+-- DROP FUNCTION IF EXISTS public.rpc_best_deals(TEXT,TEXT,TEXT,TEXT,INT);
+-- DROP FUNCTION IF EXISTS public.rpc_best_deals(TEXT,TEXT,TEXT,TEXT,TEXT,INT);
+-- DROP FUNCTION IF EXISTS public.rpc_discount_products(TEXT,TEXT,TEXT,TEXT,TEXT,INT);
+-- DROP FUNCTION IF EXISTS public.rpc_search_text(TEXT,TEXT,TEXT,TEXT,TEXT,INT);
+-- DROP FUNCTION IF EXISTS public.rpc_search_products_advanced(TEXT,TEXT,TEXT,TEXT,TEXT,NUMERIC,NUMERIC,TEXT,INT);
+-- DROP FUNCTION IF EXISTS public.rpc_count_products(TEXT,TEXT,TEXT,TEXT,TEXT,TEXT,NUMERIC,NUMERIC,TEXT);
+-- DROP FUNCTION IF EXISTS public.rpc_catalog_dimensions();
+-- DROP FUNCTION IF EXISTS public.rpc_get_subcategorias();
+-- DROP FUNCTION IF EXISTS public.rpc_get_tallas(TEXT,TEXT,TEXT);
+
+
+-- ============================================================================
+-- VERIFICACIÓN
 -- ============================================================================
 
+-- Confirmar que hay exactamente 16 funciones:
+-- SELECT routine_name,
+--        string_agg(p.data_type, ', ' ORDER BY p.ordinal_position) AS param_types,
+--        COUNT(p.parameter_name) AS num_params
+-- FROM information_schema.routines r
+-- LEFT JOIN information_schema.parameters p
+--   ON r.specific_name = p.specific_name AND p.parameter_mode = 'IN'
+-- WHERE r.routine_schema = 'public' AND r.routine_name LIKE 'rpc_%'
+-- GROUP BY r.routine_name, r.specific_name
+-- ORDER BY r.routine_name;
+
+-- Pruebas rápidas:
 -- SELECT rpc_catalog_summary();
--- SELECT rpc_price_analysis(p_marca := 'Nike', p_color := 'Negro');
--- SELECT rpc_discount_analysis(p_categoria := 'Calzado', p_color := 'Blanco');
--- SELECT rpc_availability_analysis(p_color := 'Azul');
--- SELECT rpc_segment_price_comparison(p_color := 'Negro');
+-- SELECT rpc_price_analysis(p_marca := 'Nike', p_talla := '42', p_disponibilidad := 'available');
+-- SELECT rpc_discount_analysis(p_subcategoria := 'Tenis', p_articulo := 'Superstar');
+-- SELECT rpc_availability_analysis(p_subcategoria := 'Tenis', p_talla := '42');
+-- SELECT rpc_segment_price_comparison(p_subcategoria := 'Tenis');
 -- SELECT rpc_category_price_comparison(p_color := 'Rojo');
--- SELECT rpc_subcategory_distribution(p_categoria := 'Calzado', p_color := 'Negro');
--- SELECT rpc_model_variety(p_marca := 'Nike', p_color := 'Negro');
--- SELECT rpc_price_distribution(p_categoria := 'Calzado', p_color := 'Blanco');
--- SELECT rpc_size_distribution(p_categoria := 'Calzado', p_color := 'Negro');
--- SELECT rpc_best_deals(p_color := 'Negro', p_disponibilidad := 'available', p_limit := 5);
--- SELECT rpc_discount_products(p_marca := 'Adidas', p_color := 'Blanco', p_limit := 5);
+-- SELECT rpc_subcategory_distribution(p_disponibilidad := 'available');
+-- SELECT rpc_model_variety(p_subcategoria := 'Tenis', p_disponibilidad := 'available');
+-- SELECT rpc_price_distribution(p_subcategoria := 'Tenis', p_disponibilidad := 'available');
+-- SELECT rpc_size_distribution(p_disponibilidad := 'available', p_articulo := 'Superstar');
+-- SELECT rpc_best_deals(p_subcategoria := 'Tenis', p_talla := '42', p_articulo := 'Air Max');
+-- SELECT rpc_discount_products(p_talla := 'M', p_disponibilidad := 'available', p_articulo := 'Superstar');
 -- SELECT rpc_count_by_filters(p_subcategoria := 'Tenis', p_color := 'Negro', p_segmento := 'Hombre');
--- SELECT rpc_search_text('Air Max');
+-- SELECT rpc_search_text('Air Max', p_subcategoria := 'Tenis', p_color := 'Negro', p_talla := '42');
 -- SELECT rpc_search_products_advanced(p_subcategoria := 'Tenis', p_color := 'Negro', p_segmento := 'Hombre', p_limit := 3);
--- SELECT rpc_article_available_sizes(p_articulo := 'Superstar');
+-- SELECT rpc_article_available_sizes('Superstar', p_marca := 'Adidas', p_color := 'Blanco');

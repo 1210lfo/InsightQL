@@ -3,6 +3,7 @@ LangGraph Nodes Implementation
 Each node is a function that takes state and returns updated state.
 """
 
+import json
 import logging
 import re
 from datetime import datetime, timedelta
@@ -20,6 +21,7 @@ from src.mcp.tools import (
     validate_query_plan,
     execute_analytics_query,
 )
+from src.security import validate_user_input as _security_validate
 
 logger = logging.getLogger(__name__)
 
@@ -67,8 +69,14 @@ Analiza la pregunta del usuario y extrae 3 elementos:
 | unsupported | No relacionado con moda | "clima hoy", "noticias" |
 
 ## 2. ENTITIES (entidades detectadas)
-Extrae: marcas, categorías (Calzado/Ropa/Accesorios), subcategorías (Tenis/Camisetas), 
-segmentos (Hombre/Mujer/Unisex/Niños), colores, modelos, precios, tallas.
+Extrae: marcas, categorías (Calzado/Ropa exterior/Ropa interior/Accesorios), 
+subcategorías (Tenis, Bodys, Bisuteria, Joggers, Leggins, Polo, Crop tops, Bermudas, Vestidos de baño, etc.), 
+segmentos (Hombre/Mujer/Unisex/Niño/Niña), colores, modelos, precios, tallas.
+⚠️ Mapea sinónimos del usuario a valores reales de la BD:
+   body/bodies → Bodys, bisutería → Bisuteria, bóxer → Boxer, sostén/bra → Brassier,
+   hoodie → Sudadera, leggings/mallas → Leggins, jogger → Joggers, morral → Mochila,
+   traje de baño → Vestidos de baño, pantaloneta → Pantalonetas, perfume → Perfumes,
+   calcetín/medias → Calcetines, overall/enterizo → Overol.
 
 ## 3. MISSING_PARAMS (parámetros faltantes)
 ⚠️ REGLA CRÍTICA: Solo incluye parámetros que el usuario NO mencionó.
@@ -111,13 +119,13 @@ async def parse_node(state: AnalyticsAgentState) -> AnalyticsAgentState:
     state["current_node"] = "parse"
     user_query = state["user_query"]
     
-    # Anti-prompt injection
-    try:
-        sanitized_query = _sanitize_user_query(user_query)
-    except ValueError as e:
+    # Anti-prompt injection (delegate to centralized security module)
+    is_valid, validation_error = _security_validate(user_query)
+    if not is_valid:
         state["intent"] = "unsupported"
-        state["error_message"] = str(e)
+        state["error_message"] = validation_error
         return state
+    sanitized_query = user_query[:500].strip()
     
     # Get schema context
     schema = await get_schema_metadata(scope="all")
@@ -156,34 +164,8 @@ Timezone del usuario: {state['user_context'].get('timezone', 'UTC')}
     return state
 
 
-def _sanitize_user_query(query: str) -> str:
-    """
-    Sanitize user query to prevent prompt injection attacks.
-    
-    Raises:
-        ValueError: If query contains forbidden patterns
-    """
-    forbidden_patterns = [
-        r"ignore\s+previous",
-        r"system\s*:",
-        r"\{\{",
-        r"ROLE\s*:",
-        r"<\|",
-        r"</?(system|assistant|user)>",
-    ]
-    
-    for pattern in forbidden_patterns:
-        if re.search(pattern, query, re.IGNORECASE):
-            raise ValueError("La consulta contiene patrones no permitidos")
-    
-    # Limit length
-    return query[:500].strip()
-
-
 def _extract_json_from_response(content: str) -> dict[str, Any]:
     """Extract JSON from LLM response, handling markdown code blocks."""
-    import json
-    
     # Try to find JSON in code blocks
     json_match = re.search(r"```(?:json)?\s*(\{.*?\})\s*```", content, re.DOTALL)
     if json_match:
@@ -303,48 +285,82 @@ Convierte la intención del usuario en una llamada a función RPC con parámetro
 | get_catalog_summary() | ninguno | Resumen general |
 | get_products_by_brand | marca*, categoria?, segmento?, limit? | Productos de una marca |
 | get_products_by_category | categoria*, subcategoria?, marca?, segmento? | Productos de categoría |
-| search_products | search_term*, marca?, categoria? | Búsqueda por texto libre |
+| search_products | search_term*, marca?, categoria?, segmento?, disponibilidad?, **subcategoria?**, **color?**, **talla?**, limit? | Búsqueda por texto libre con filtros avanzados |
+| get_article_available_sizes | articulo*, **marca?**, **color?** | Tallas disponibles de un artículo (marca/color para desambiguar) |
 
 ## 💰 PRECIOS Y PRODUCTOS ESPECÍFICOS
 | Función | Parámetros | Uso |
 |---------|------------|-----|
-| get_price_analysis | marca?, categoria?, segmento?, **subcategoria?** | Estadísticas de precio (promedio, min, max) con filtro de subcategoría |
+| get_price_analysis | marca?, categoria?, segmento?, subcategoria?, color?, **talla?**, **disponibilidad?**, **articulo?** | Estadísticas de precio con filtros completos |
 | **get_top_priced_products** | categoria?, segmento?, marca?, **subcategoria?**, **color?**, **talla?**, **disponibilidad?**, orden?, limit? | **MÁS CAROS/BARATOS con filtros avanzados** |
 | count_products_by_price | precio_min?, precio_max?, categoria?, segmento?, marca?, color?, subcategoria?, talla?, disponibilidad? | Conteos con filtros múltiples |
-| get_price_distribution | categoria?, segmento?, marca? | Distribución por rangos |
-| get_segment_price_comparison | marca?, categoria? | Comparar Hombre vs Mujer vs Unisex |
-| get_category_price_comparison | marca?, segmento? | Comparar entre categorías |
+| get_price_distribution | categoria?, segmento?, marca?, color?, **subcategoria?**, **disponibilidad?** | Distribución por rangos con más filtros |
+| get_segment_price_comparison | marca?, categoria?, color?, **subcategoria?** | Comparar Hombre vs Mujer vs Unisex (filtrable por subcategoría) |
+| get_category_price_comparison | marca?, segmento?, color? | Comparar entre categorías |
 
 ## 🏷️ DESCUENTOS
 | Función | Parámetros | Uso |
 |---------|------------|-----|
-| get_discount_analysis | categoria?, segmento?, marca?, **subcategoria?** | % descuento, ahorro total (con filtro de subcategoría) |
-| **get_best_deals** | categoria?, segmento?, marca?, **disponibilidad?**, limit? | **Mejores ofertas** (disponibilidad="available" para solo disponibles) |
-| get_discount_products | marca?, categoria?, segmento?, limit? | Lista de productos con descuento |
+| get_discount_analysis | categoria?, segmento?, marca?, subcategoria?, color?, **talla?**, **disponibilidad?**, **articulo?** | % descuento, ahorro total con filtros completos |
+| **get_best_deals** | categoria?, segmento?, marca?, disponibilidad?, color?, **subcategoria?**, **talla?**, **articulo?**, limit? | **Mejores ofertas** (subcategoria, talla, articulo para filtrar) |
+| get_discount_products | marca?, categoria?, segmento?, subcategoria?, color?, **talla?**, **disponibilidad?**, **articulo?**, limit? | Lista productos con descuento filtrados |
 
 ## 📦 INVENTARIO Y TALLAS
 | Función | Parámetros | Uso |
 |---------|------------|-----|
-| get_availability_analysis | categoria?, segmento?, marca? | % disponible/agotado |
+| get_availability_analysis | categoria?, segmento?, marca?, color?, **subcategoria?**, **talla?** | % disponible/agotado con filtro subcategoría y talla |
 | get_available_products | marca?, categoria?, segmento?, **talla?** | Productos disponibles |
-| get_size_distribution | marca?, categoria?, segmento? | Distribución de tallas |
+| get_size_distribution | marca?, categoria?, segmento?, subcategoria?, color?, **disponibilidad?**, **articulo?** | Distribución de tallas (filtrar por artículo específico) |
 
 ## 📊 ANÁLISIS DE CATÁLOGO
 | Función | Parámetros | Uso |
 |---------|------------|-----|
-| get_subcategory_distribution | categoria?, segmento?, marca? | Productos por subcategoría |
-| get_model_variety_analysis | categoria?, segmento?, marca? | Modelos/colores únicos |
-| get_segment_analysis | marca?, categoria? | Análisis por segmento |
+| get_subcategory_distribution | categoria?, segmento?, marca?, color?, **disponibilidad?** | Productos por subcategoría (solo disponibles si se desea) |
+| get_model_variety_analysis | categoria?, segmento?, marca?, color?, **subcategoria?**, **disponibilidad?** | Modelos/colores únicos filtrados |
 
 # VALORES VÁLIDOS ⚠️ CRÍTICO
 - **Segmentos**: Hombre, Mujer, Unisex, Niño, Niña
 - **Categorías**: Calzado, Ropa exterior, Ropa interior, Accesorios
 
-## SUBCATEGORÍAS POR CATEGORÍA:
-- **Calzado**: Tenis, Sandalias, Botas, Mocasines, Botines, Zapatillas, Alpargatas
-- **Ropa exterior**: Chaquetas, Vestidos, Camisas, Pantalones, Sudaderas, Camisetas, Blusas, Shorts, Faldas, Jeans, Buzos, Blazers, Chalecos, Cardigans
-- **Ropa interior**: Medias, Boxers, Brassieres, Pijamas, Bodies
-- **Accesorios**: Gorras, Cinturones, Bolsos, Billeteras, Bufandas, Gafas
+## SUBCATEGORÍAS REALES EN LA BASE DE DATOS (46 valores):
+- **Calzado**: Tenis, Sandalias, Botas, Zapatos
+- **Ropa exterior**: Bermudas, Buzo, Camisa, Camisas, Camiseta, Camisetas, Chaquetas, Conjunto, Crop tops, Crop Tops, Faldas, Jeans, Joggers, Leggins, Overol, Pantalon, Pantalonetas, Polo, Shorts, Sudadera, Top, Vestidos, Vestidos de baño, Bata
+- **Ropa interior**: Bodys, Boxer, Brassier, Calcetines, Panties, Pijamas
+- **Accesorios**: Accesorios, Billeteras, Bisuteria, Bolsos, Bufanda, Cinturon, Cinturones, Gorras, Marroquineria, Mochila, Perfumes
+
+## ⚠️ SINÓNIMOS → VALOR EXACTO EN BD
+El usuario puede escribir variantes. SIEMPRE mapea al valor exacto de la BD:
+| Lo que dice el usuario | Valor exacto en BD |
+|------------------------|---------------------|
+| body, bodies, bodysuit | Bodys |
+| bisutería, joyería, accesorios joyería | Bisuteria |
+| brassiere, sostén, sujetador, bra | Brassier |
+| bóxer, boxers, calzoncillo | Boxer |
+| pantalón, pantalones | Pantalon |
+| sudaderas, hoodie, hoodies | Sudadera |
+| cinturón, belt | Cinturon o Cinturones |
+| bufanda, bufandas, scarf | Bufanda |
+| morral, maleta, backpack | Mochila |
+| polo, polos, polo shirt | Polo |
+| overall, enterizo | Overol |
+| leggins, leggings, mallas | Leggins |
+| jogger, joggers, pants deportivos | Joggers |
+| crop top, croptop | Crop tops |
+| vestido de baño, traje de baño, swimwear | Vestidos de baño |
+| pantaloneta, pantalonetas, bermuda | Pantalonetas o Bermudas |
+| perfume, perfumes, fragancia | Perfumes |
+| marroquinería, cuero, leather goods | Marroquineria |
+| calcetín, calcetines, medias | Calcetines |
+| camisa, camisas (el usuario no distingue singular/plural) | Camisa o Camisas |
+| camiseta, camisetas, t-shirt | Camiseta o Camisetas |
+| panti, panties, braga | Panties |
+| zapato, zapatos | Zapatos |
+| sandalia, sandalias, chanclas | Sandalias |
+| bota, botas | Botas |
+| gorra, gorras, cap | Gorras |
+
+⚠️ NOTA: Hay subcategorías duplicadas en singular/plural (Camisa/Camisas, Camiseta/Camisetas, Cinturon/Cinturones, Crop tops/Crop Tops).
+Cuando el usuario mencione alguna, usa la versión MÁS COMÚN (plural si existe). Si no sabes cuál, envía AMBAS en dos consultas o usa search_products.
 
 - **Colores**: Blanco, Negro, Azul, Rojo, Verde, Gris, Naranja, Rosa, Café, Amarillo, Morado, Beige
 
@@ -381,23 +397,56 @@ Convierte la intención del usuario en una llamada a función RPC con parámetro
 "precio promedio de chaquetas de hombre en Zara"
 → get_price_analysis(subcategoria="Chaquetas", segmento="Hombre", marca="Zara")
 
+"precio promedio de tenis talla 42 disponibles"
+→ get_price_analysis(subcategoria="Tenis", talla="42", disponibilidad="available")
+
 "descuento promedio en tenis Nike"
 → get_discount_analysis(subcategoria="Tenis", marca="Nike")
+
+"descuento promedio del Superstar"
+→ get_discount_analysis(articulo="Superstar")
 
 "cuántos tenis negros de mujer > 300000"
 → count_products_by_price(subcategoria="Tenis", color="Negro", segmento="Mujer", precio_min=300000)
 
-"mejores ofertas de chaquetas"
-→ get_best_deals(categoria="Ropa exterior")
+"mejores ofertas de tenis"
+→ get_best_deals(subcategoria="Tenis")
+
+"mejores ofertas del Air Max disponibles"
+→ get_best_deals(articulo="Air Max", disponibilidad="available")
 
 "producto con más descuento que esté disponible"
 → get_best_deals(disponibilidad="available", limit=1)
 
-"comparar precios hombre vs mujer"
-→ get_segment_price_comparison()
+"comparar precios hombre vs mujer en tenis"
+→ get_segment_price_comparison(subcategoria="Tenis")
 
 "qué tallas hay de camisetas"
-→ get_size_distribution(categoria="Ropa exterior")
+→ get_size_distribution(categoria="Ropa exterior", subcategoria="Camisetas")
+
+"tallas disponibles del Superstar"
+→ get_article_available_sizes(articulo="Superstar")
+
+"tallas del Superstar blanco de Adidas"
+→ get_article_available_sizes(articulo="Superstar", marca="Adidas", color="Blanco")
+
+"disponibilidad de tenis talla 42"
+→ get_availability_analysis(subcategoria="Tenis", talla="42")
+
+"buscar Air Max negro talla 42"
+→ search_products(search_term="Air Max", color="Negro", talla="42")
+
+"distribución de precios de tenis disponibles"
+→ get_price_distribution(subcategoria="Tenis", disponibilidad="available")
+
+"variedad de modelos de tenis Nike"
+→ get_model_variety_analysis(subcategoria="Tenis", marca="Nike")
+
+"subcategorías disponibles de calzado"
+→ get_subcategory_distribution(categoria="Calzado", disponibilidad="available")
+
+"productos con descuento del Superstar disponibles"
+→ get_discount_products(articulo="Superstar", disponibilidad="available")
 ```
 
 # FORMATO DE RESPUESTA
